@@ -1,0 +1,1546 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Building a SimpleFOC AI Assistant with Retrieval Augmented Generation (RAG)</title>
+<meta name="description" content="Building a SimpleFOC AI Assistant with Retrieval Augmented Generation (RAG)"/>
+<meta property="article:author" content="Mayalen Etcheverry">
+<link rel="icon" type="image/png" sizes="32x32" href="https://raw.githubusercontent.com/mayalenE/simple-foc-assistant/main/logo_white_32x32.png">
+<link rel="stylesheet" href="highlight.css">
+<link rel="stylesheet" href="style.css">
+
+<script>
+MathJax = {
+  tex: { inlineMath: [['$', '$']] }
+};
+</script>
+<script type="text/javascript" id="MathJax-script" async
+  src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js">
+</script>
+<h1 id="building-a-simplefoc-ai-assistant-with-retrieval-augmented-generation-rag">Building a SimpleFOC AI Assistant with Retrieval Augmented Generation (RAG)</h1>
+<p>Mayalen Etcheverry | April, 2024</p>
+<p><a href="https://colab.research.google.com/github/mayalenE/simple-foc-assistant/blob/main/SimpleFOC_AI_Assistant_RAG.ipynb" target="_blank" id="colablink" class="colab-root"><span id="reprotext">Reproduce in </span><span class="colab-span">Notebook</span></a>
+<a href="https://github.com/mayalenE/simple-foc-assistant" target="_blank" id="colablink" class="colab-root"><span id="reprotext">Github </span><span class="github-span">Repository</span></a></p>
+<div class="toc">
+<ul>
+<li><a href="#what-is-simplefoc">What is SimpleFOC?</a></li>
+<li><a href="#why-a-simplefoc-ai-assistant">Why a SimpleFOC AI Assistant?</a></li>
+<li><a href="#retrieval-augmented-generation">Retrieval Augmented Generation</a></li>
+<li><a href="#rag-pipeline">RAG Pipeline</a></li>
+<li><a href="#main-design-choices">Main Design Choices 💡</a></li>
+<li><a href="#lets-implement-it">Let's implement it! 💻</a><ul>
+<li><a href="#installs">Installs</a></li>
+<li><a href="#1-loading-the-simplefoc-data">1) Loading the SimpleFOC data</a><ul>
+<li><a href="#download-simplefoc-docs">Download SimpleFOC Docs</a></li>
+<li><a href="#optional-simplefoc-discourse">[Optional] SimpleFOC Discourse</a></li>
+<li><a href="#loading-data-into-llamaindex">Loading Data into LlamaIndex</a></li>
+</ul>
+</li>
+<li><a href="#2-process-data-as-chunks-of-tokens">2) Process data as chunks of tokens</a></li>
+<li><a href="#3-embed-chunks-into-a-vectordb">3) Embed chunks into a VectorDB</a></li>
+<li><a href="#4-setup-a-retrieval-system-using-vector-search">4) Setup a retrieval system using Vector Search</a></li>
+<li><a href="#5-import-the-llm">5) Import the LLM</a></li>
+<li><a href="#6-augment-input-prompt">6) Augment Input Prompt</a></li>
+</ul>
+</li>
+<li><a href="#evaluation">Evaluation 🤔</a><ul>
+<li><a href="#test-1">Test 1</a></li>
+<li><a href="#test-2">Test 2</a></li>
+<li><a href="#test-3">Test 3</a></li>
+<li><a href="#test-4">Test 4</a></li>
+<li><a href="#test-5">Test 5</a></li>
+<li><a href="#test-6">Test 6</a></li>
+</ul>
+</li>
+<li><a href="#whats-next">What's Next?</a></li>
+</ul>
+</div>
+<h2 id="what-is-simplefoc">What is SimpleFOC?</h2>
+<p><img src="https://repository-images.githubusercontent.com/173681491/717e1b00-8c9f-11ea-83f4-513489af9d3b" alt="SimpleFOC" width="400"/></p>
+<p>The <a href="https://github.com/simplefoc/Arduino-FOC">SimpleFOC library</a> is an open-source library for controlling brushless DC (BLDC) motors with Field Oriented Control (FOC) algorithms. <a href="https://www.youtube.com/watch?v=-mLuU1Nscu4">Brushless motor control is awesome for robotics</a> but it can be quite hard to understand and implement in practice, and existing solutions are often very specific to certain (expensive) hardware configurations. SimpleFOC has gained increasing popularity within the hobby community because it provides an open-source and user-friendly library to facilitate BLDC motor control for a wide variety of motor + driver + sensor + microcontroller combinations, including low-cost ones, which has led to its widespread usage by the community hence to some amazing <a href="https://www.youtube.com/watch?v=WLkLe2-GfXE">projects</a> 🤖</p>
+<h2 id="why-a-simplefoc-ai-assistant">Why a SimpleFOC AI Assistant?</h2>
+<p>As the community grows, there are more and more questions that pop up into the <a href="https://community.simplefoc.com/">SimpleFOC community forum</a> spanning various queries such as resolving potential hardware or installation issues, asking for advice in choosing the right setup, understanding bugs in one's code, etc. While those questions can be very diverse and some of them can be hard to answer, even for the expert members of the SimpleFOC community, there also are questions for which the answers can often be found already online, notably in the <a href="https://docs.simplefoc.com/">SimpleFOC documentation</a> (or in other online resources). However for users it can be quite complicated or time-expensive to directly search for information in the SimpleFOC or other support docs as these documentations can become quite long and hard to parse, especially for beginners. This is where an AI Assistant could be very handy: the user could directly ask question in natural language form to the AI assistant, which could go and retrieve the relevant information from these docs automatically, and then communicate it back to the user into a comprehensive and concise manner, redirecting toward useful resources when necessary.</p>
+<p>This is exactly what we are going to try to build in this notebook. To do so, we'll see how we can turn a general LLM assistant (such as Mistral models) into a customized SimpleFOC assistant without having to re-train the weights of the networks nor having to do any kind of heavy computation. Instead, we'll simply provide the LLM with relevant information from the SimpleFOC docs as input so that the LLM can tailor its answers in a meaningful manner. This simple and neat idea is called <em>Retrieval Augmented Generation</em>, or RAG in short, and was proposed by Lewis et al. back in 2020 in <a href="https://proceedings.neurips.cc/paper/2020/hash/6b493230205f780e1bc26945df7481e5-Abstract.html">this paper</a>. The code is based on <em>open-source</em> packages and LLM weights (quantized mistral-instruct) and should be <em>easy-to-run</em>, e.g. directly in colab with a T4 free-access gpu.</p>
+<h2 id="retrieval-augmented-generation">Retrieval Augmented Generation</h2>
+<p>Let's start by decorticating the basic ideas behind R-A-G 👇</p>
+<ul>
+<li>Retrieval: we want to <em>retrieve relevant information</em> given an input query. In our case, an input query would come from a user of the SimpleFOC community and could for instance ask "What are the supported position sensors with simplefoc?" or "Can esp8266 chip be used to drive 6pwm drivers with simplefoc?"</li>
+<li>Augmented: The way this information is passed to the LLM is simply by <em>augmenting the prompt</em> with that retrieved knowledge</li>
+<li>Generation: retrieval augmentation is fed as inputs to the LLM which returns <em>generative outputs</em>, as usual with LLMs.</li>
+</ul>
+<p>Why RAG could be useful to construct our SimpleFOC AI Assistant?</p>
+<p>Well first, mainstream AI assistants such as variants of GPT, LLama and Mistrals tend to return <em>generic</em> information, as they are trained from massive amount of data from the internet. In our target use-case questions will be specific to details of the SimpleFOC library and we want the answer to communicate the true information from SimpleFOC support and docs, or at least to communicate uncertainty when it cannot find the answer within the docs. Yet, this is not the case when using off-the-shelf LLMs, despite the fact that it is very likely that SimpleFOC docs, which are hosted on github, have been part of the training data of these LLMs.</p>
+<p>For instance let's have a look of what ChatGPT 4 answers to some questions SimpleFOC users might have:</p>
+<blockquote>
+<p><strong>User:</strong></p>
+<blockquote>
+<p>Can esp8266 chip be used to drive 6pwm drivers with simplefoc?</p>
+</blockquote>
+<p><strong>ChatGPT:</strong></p>
+<blockquote>
+<p>The ESP8266 chip can indeed be used to drive motors using PWM (Pulse Width Modulation), and integrating it with the SimpleFOC (Field Oriented Control) library is technically feasible for controlling brushless motors with precision. However, there are a few considerations to keep in mind when attempting to use it to drive 6 PWM drivers:</p>
+<blockquote>
+<p><strong>1. GPIO Pins:</strong> The ESP8266 has a limited number of GPIO pins available for use, and not all of them can be used for PWM output. You'll need to ensure that the ESP8266 module you're using has enough PWM-capable GPIO pins for your application. For 6 PWM drivers, you'll need at least 6 PWM-capable pins, assuming one PWM signal per driver.</p>
+<p><strong>2. PWM Channels:</strong> The ESP8266 hardware supports a limited number of PWM channels. This limitation can sometimes be circumvented by software PWM libraries, but this might introduce limitations in terms of performance and accuracy. It's crucial to check if the PWM resolution and frequency meet your requirements for motor control.</p>
+<p><strong>3. Processing Power and Timing:</strong> The ESP8266 is quite capable in terms of processing power for many applications, but running sophisticated control algorithms like those required for precise motor control with SimpleFOC on 6 motors simultaneously might push its limits, especially if other tasks (like Wi-Fi communication) are being performed. Timing precision is vital for motor control, and the ESP8266's multitasking environment might introduce jitter.</p>
+<p><strong>4. SimpleFOC Library Compatibility:</strong> The SimpleFOC library is designed to be hardware-agnostic, but its performance and the features available can vary significantly between different microcontroller platforms. Ensure that the library supports the ESP8266 with the features you need, especially regarding the number of motors and the control precision.</p>
+<p><strong>5. Power Supply and Driver Compatibility:</strong> Make sure that your motor drivers are compatible with the PWM signal levels of the ESP8266 and that they can handle the required power levels for your motors.</p>
+</blockquote>
+<p>For a project driving 6 PWM drivers with an ESP8266 using SimpleFOC, you might need to carefully manage resources, possibly modify the library for better compatibility, or use additional hardware like PWM expanders. It's also a good idea to look into the community forums or documentation for any similar projects or guidance specific to your application needs.</p>
+</blockquote>
+</blockquote>
+<p>👉 A first problematic here is that the answer from GPT tend to be quite long and generic, whereas this question rather expects some YES or NO answer.</p>
+<p>👉 Moreover, if we take the time to read the answer we get the understanding that YES it is possible to use an ESP8266 microcontroller be to drive 6pwm drivers with simplefoc. Unfortunately, as reported in <a href="https://docs.simplefoc.com/microcontrollers#choosing-the-microcontroller">this table</a> of SimpleFOC docs, this is not true.
+This issue, often called <strong>hallucination</strong>, is a well-known limitation of LLMs: LLMs can generate "good looking" text that sounds convincing, but it does not mean that it is true or factual, which is something that we want to remedy in our target use-case.</p>
+<p>Let's look at another question that a user might have, to which we add <em>"Give a concise answer based on the simpleFOC documentation"</em> to avoid too lenghty answers, and see how ChatGPT 4 answers it:</p>
+<blockquote>
+<p><strong>User:</strong></p>
+<blockquote>
+<p>User
+Simplefoc compiles and I flush it to my board, but nothing moves. I use platformio, what could be the problem? Give a concise answer based on the simpleFOC documentation.</p>
+</blockquote>
+<p><strong>ChatGPT:</strong>:</p>
+<blockquote>
+<p>If SimpleFOC compiles and you've flashed it to your board but nothing moves, the issue could stem from a few common areas according to the SimpleFOC documentation. Here's a concise checklist of things to verify:</p>
+<blockquote>
+<ol>
+<li>
+<p><strong>Wiring and Connections</strong>: Ensure all connections are secure and correctly wired, including the motor to the driver, the driver to the microcontroller, and any sensors you are using.</p>
+</li>
+<li>
+<p><strong>Motor and Driver Compatibility</strong>: Verify that the motor is compatible with the driver you're using and that the driver can handle the motor's current and voltage requirements.</p>
+</li>
+<li>
+<p><strong>Power Supply</strong>: Ensure that the power supply is adequate for your motor and driver. It should meet the voltage and current requirements of your system.</p>
+</li>
+<li>
+<p><strong>Configuration and Calibration</strong>: Check if the motor, driver, and any sensor configurations in your code match your hardware setup. This includes motor parameters (pole pairs, current limit, etc.) and sensor calibration if using encoders or other position sensors.</p>
+</li>
+<li>
+<p><strong>Code Upload</strong>: Confirm that the code has been successfully uploaded to the board. Sometimes, the upload process might appear successful, but issues like incorrect board settings in PlatformIO can cause the firmware not to run as expected.</p>
+</li>
+<li>
+<p><strong>Motor Control Code</strong>: Ensure that your motor control code (loop) is correctly implemented. This includes initializing the motor and driver, setting the target value (velocity, position, or torque), and periodically updating the motor controller in your loop.</p>
+</li>
+<li>
+<p><strong>Debugging</strong>: Use serial print statements to debug your code. Check for any errors or warnings during initialization and operation. Verify that the sensor readings (if applicable) are reasonable and that the control loop is active.</p>
+</li>
+</ol>
+</blockquote>
+<p>If after checking these areas the problem persists, consulting the SimpleFOC community forum or GitHub issues page may provide additional insight or solutions specific to your hardware setup and application.</p>
+</blockquote>
+</blockquote>
+<p>👉 Again we have a generic answer with generic recommandations and misses to answer with specific relevant information from the SimpleFOC resources. Yet, there is a very common explanation to the issue raised by this user when using PlatformIO with SimpleFOC which is to not forget to add the <code>lib_archive=False</code> option to the <code>platfromio.ini</code> file as well explained <a href="https://docs.simplefoc.com/library_platformio">here</a> in the docs and as commonly reminded in the <a href="https://community.simplefoc.com/search?q=platformio%20lib_archive">SimpleFOC forum</a>. We would like the AI Assistant to remind this to the user and to emphasize is as possible cause for the error.</p>
+<p>In summary, RAG should a priori be useful in two ways:</p>
+<ol>
+<li>
+<p>RAG can help prevent hallucinations by prompting the LLM with information based on relevant passages from the docs that are factual.</p>
+</li>
+<li>
+<p>RAG can help specify the responses with information coming from actual data, offering more interpretability as we know where the generations came from, instead of providing generic responses.</p>
+</li>
+</ol>
+<h2 id="rag-pipeline">RAG Pipeline</h2>
+<p><img alt="pipeline" src="https://raw.githubusercontent.com/mayalenE/simple-foc-assistant/main/rag-pipeline.png" /></p>
+<p>As summarized in the above figure, we are going to follow the following steps
+in this notebook:</p>
+<ol>
+<li>Download the SimpleFOC documentation (collection of markdown files)</li>
+<li>Format and pre-process the documentation into chuncks of tokens</li>
+<li>Embed all of the chunks into numerical reprentations (embedding) using an <strong>Embedding Model</strong></li>
+<li>Setup a retrieval system that uses <strong>Vector Search</strong> to find relevant chunks of text based on a query</li>
+<li>Create a prompt that augment the original query with the retrieved pieces of text</li>
+<li>Use an existing LLM (e.g. quantized mistral-instruct) to generate an answer to the augmented prompt</li>
+</ol>
+<h2 id="main-design-choices">Main Design Choices 💡</h2>
+<p>The below table recaps the main design choices that we have to care about when implementing a RAG pipeline, as they can largely influence the resulting outputs 👇</p>
+<table>
+<thead>
+<tr>
+<th><strong>Design Choice</strong></th>
+<th><strong>Impact</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Chunking the data</strong></td>
+<td>1) The way we generate chunks will directly influence the results: it is usually done with a fixed-size overlapping sliding window <br> but more advanced strategies of chunking could be envisaged such as recursive or semantic chunking as explained in <a href="https://www.youtube.com/watch?v=8OJC21T2SL4">this video</a> <br> 2) The length of the chunks will also influence the results: smaller chunks will lead to more precise context but might miss important <br> information whereas larger chunks might hide relevant fine-grained info, and the length is limited by the LLM context length. <br> 3) How we preprocess the data before chunking is also one thing to consider as we want to remove non-useful information/tokens</td>
+</tr>
+<tr>
+<td><strong>Embedding model</strong></td>
+<td>The choice of the embedding model will determine which chunks of text are considered similar (in meaning) to the input query, <br> which will have a direct impact on what information is retrieved from the vector database.</td>
+</tr>
+<tr>
+<td><strong>Similarity search</strong></td>
+<td>To find chunks relevant to the query, Vector search is often used to find vectors that are the closest in the high-demensional embedding space. <br> Design choices include the similarity score measure, which is usually a simple dot product or cosine similarity, as well as the number of retrieved tokens. <br> One could also consider replacing pure vector/semantic search with a hybrid of vector search and keyword-based search.</td>
+</tr>
+<tr>
+<td><strong>Large Language Model (LLM)</strong></td>
+<td>Obviously the choice of the base LLM will highly impact the final results given the same RAG context and input prompt. <br> I do not have a proper tip to choose the right LLM, except that it is usually quite constrain by the hardware setup at your disposal. <br> The LLM context window, number of tokens that a LLM can accept as input, can also condition the choice, in particular for<br> the RAG pipeline where the context window will directly determine the number of reference items we can feed to the LLM. <br> I usually like to go for small open-source models because they are easy to play with.</td>
+</tr>
+<tr>
+<td><strong>Base Prompt</strong></td>
+<td>Finally, an important design choice is how we will do "<a href="https://en.wikipedia.org/wiki/Prompt_engineering">prompt engineering</a>" to structure the base prompt that we will augment <br> with the retrieved items, and then feed as input to the generative LLM together. The aim here is for the generated output to look <br> as close as possible to what an ideal SimpleFOC AI Assistant should answer.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="lets-implement-it">Let's implement it! 💻</h2>
+<h3 id="installs">Installs</h3>
+<p>We'll be using the <a href="https://docs.llamaindex.ai/en/stable/">LlamaIndex</a> library 🦙, that as you will see makes it very easy to implement context augmentation for LLMs with only few lines of code. We also need to install the <a href="https://docs.llamaindex.ai/en/stable/examples/embeddings/huggingface/">llama-index-embeddings-huggingface</a> library in order to be able to load embedding models from the HuggingFace <a href="https://huggingface.co/spaces/mteb/leaderboard">embedding leaderboard</a> 🤗, as well as Hugging Face <a href="https://huggingface.co/docs/transformers/en/index">transformers</a> and <a href="https://huggingface.co/docs/optimum/index">optimum</a> libraries enabling us to load and use state-of-the art pretrained models efficiently. We additionally install <a href="https://github.com/AutoGPTQ/AutoGPTQ">auto-gptq</a> library, as we'll load quantized versions of LLMs for even higher efficiency.</p>
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="err">!</span><span class="n">pip</span> <span class="n">install</span> <span class="o">-</span><span class="n">q</span> <span class="n">transformers</span> <span class="n">optimum</span>
+<span class="err">!</span><span class="n">pip</span> <span class="n">install</span> <span class="o">-</span><span class="n">q</span> <span class="n">llama</span><span class="o">-</span><span class="n">index</span>
+<span class="err">!</span><span class="n">pip</span> <span class="n">install</span> <span class="o">-</span><span class="n">q</span> <span class="n">llama</span><span class="o">-</span><span class="n">index</span><span class="o">-</span><span class="n">embeddings</span><span class="o">-</span><span class="n">huggingface</span>
+<span class="err">!</span><span class="n">pip</span> <span class="n">install</span> <span class="o">-</span><span class="n">q</span> <span class="n">auto</span><span class="o">-</span><span class="n">gptq</span>
+</pre></div>
+
+</div>
+<h3 id="1-loading-the-simplefoc-data">1) Loading the SimpleFOC data</h3>
+<p>Let's create the folder where we are going to download the documents that we'll use for RAG.</p>
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">os</span>
+<span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="s2">&quot;data/&quot;</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="c1">#ignore if data folder already exists</span>
+</pre></div>
+
+</div>
+<h4 id="download-simplefoc-docs">Download SimpleFOC Docs</h4>
+<p>Let's start by downloading the docs from SimpleFOC documentation <a href="https://docs.simplefoc.com/">https://docs.simplefoc.com/</a>.</p>
+<p>Instead of using the web-rendered documentation, we'll download the original files written in Makdown format that can be found <a href="https://raw.githubusercontent.com/simplefoc/simplefoc.github.io/master/docs/simplefoc_library/">here</a> on github. We are gonna iterate over all the files in this folder, and save them locally in our <code>data</code> folder. We do a bit of pre-processing by removing the markdown headers as they we are interested only in the content of the files.</p>
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">tqdm</span> <span class="kn">import</span> <span class="n">tqdm</span>
+<span class="kn">import</span> <span class="nn">urllib3</span>
+
+<span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">doc_fn</span> <span class="ow">in</span> <span class="n">tqdm</span><span class="p">(</span><span class="nb">enumerate</span><span class="p">([</span><span class="s1">&#39;work_roadmap.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;index.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;hardware/sensors.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;hardware/index.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;hardware/motors/index.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;hardware/motors/BLDC_motors.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;hardware/motors/phase_resistance.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;hardware/motors/stepper_motors.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;hardware/drivers/BLDC_drivers.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;hardware/drivers/stepper_drivers.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;hardware/drivers/index.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;hardware/mcus/rpi_pico.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;hardware/mcus/teensy.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;hardware/mcus/portenta.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;hardware/mcus/stm32.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;hardware/mcus/arduinos.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;hardware/mcus/index.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;hardware/mcus/esp32.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;hardware/mcus/samd.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;hardware/mcus/nRF52_mcu.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;hardware/setup_examples/nucleo_conneciton.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;hardware/setup_examples/arduino_l6234.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;hardware/setup_examples/hmbgc.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;hardware/setup_examples/drv8302.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;hardware/setup_examples/index.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;hardware/setup_examples/bluepill_conneciton.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;hardware/setup_examples/foc_shield.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;digging_deeper/index.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;digging_deeper/libray_source/foc_source.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;digging_deeper/libray_source/sensors.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;digging_deeper/libray_source/index.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;digging_deeper/libray_source/examples.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;digging_deeper/libray_source/communication.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;digging_deeper/libray_source/motiron_control.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;digging_deeper/theory/index.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;digging_deeper/theory/voltage_torque_control.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;digging_deeper/theory/pid_controller.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;digging_deeper/theory/FOC_routine.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;digging_deeper/theory/low_pass_filtering.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/index.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/monitoring.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/from_scratch.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/debug.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/sensors/hall_sensor.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/sensors/generic.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/sensors/encoder.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/sensors/index.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/sensors/magnetic/magnetic_sensor_i2c.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/sensors/magnetic/magnetic_sensor_pwm.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/sensors/magnetic/index.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/sensors/magnetic/magnetic_sensor_spi.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/sensors/magnetic/magnetic_sensor_analog.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/motion_control/index.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/motion_control/open_loop/angle_openloop.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/motion_control/open_loop/index.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/motion_control/open_loop/index_search.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/motion_control/open_loop/velocity_openloop.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/motion_control/closed_loop_control/velocity.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/motion_control/closed_loop_control/index.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/motion_control/closed_loop_control/angle.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/motion_control/closed_loop_control/torque_control/foc_current.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/motion_control/closed_loop_control/torque_control/index.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/motion_control/closed_loop_control/torque_control/voltage.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/motion_control/closed_loop_control/torque_control/dc_current.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/motors/index.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/motors/bldc_motors.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/motors/stepper_motors.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/drivers/index.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/drivers/bldc_driver/bldc_driver_3pwm.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/drivers/bldc_driver/index.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/drivers/bldc_driver/bldc_driver_6pwm.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/drivers/stepper_driver/stepper_driver_4pwm.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/drivers/stepper_driver/index.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/drivers/stepper_driver/stepper_driver_2pwm.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/current_sense/high_side.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/current_sense/index.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/current_sense/low_side.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/current_sense/inline.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/communication/index.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/communication/step_dir.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/communication/commander/index.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/communication/commander/custom.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/communication/commander/pid.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/communication/commander/scalar.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/communication/commander/lpf.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/communication/commander/motion.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;code/communication/commander/motor.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;examples/position_control_example.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;examples/position_control_example_nucleo.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;examples/drv8302.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;examples/index.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;examples/foc_pendulum.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;examples/haptics.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;examples/position_control_example_mini.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;examples/position_control_example_mini_nucleo.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;examples/velocity_control_example.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;examples/gimbal_velocity_example.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;examples/stepper_control_nucleo.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;installation/minimal_download.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;installation/index.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;installation/library_platformio.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;installation/library_download.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;cheatsheet/index.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;cheatsheet/build_flags.md&#39;</span><span class="p">,</span>
+ <span class="s1">&#39;cheatsheet/options.md&#39;</span><span class="p">])):</span>
+
+    <span class="n">doc_url</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;https://raw.githubusercontent.com/simplefoc/simplefoc.github.io/master/docs/simplefoc_library/</span><span class="si">{</span><span class="n">doc_fn</span><span class="si">}</span><span class="s2">&quot;</span>
+    <span class="n">resp</span> <span class="o">=</span> <span class="n">urllib3</span><span class="o">.</span><span class="n">request</span><span class="p">(</span><span class="s2">&quot;GET&quot;</span><span class="p">,</span> <span class="n">doc_url</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">resp</span><span class="o">.</span><span class="n">status</span> <span class="o">==</span> <span class="mi">200</span><span class="p">:</span>
+        <span class="n">doc_fp</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;data/doc_</span><span class="si">{</span><span class="n">i</span><span class="si">:</span><span class="s2">04d</span><span class="si">}</span><span class="s2">.txt&quot;</span>
+        <span class="n">doc_str</span> <span class="o">=</span> <span class="n">resp</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="s2">&quot;utf-8&quot;</span><span class="p">)</span>
+
+        <span class="c1"># remove the header</span>
+        <span class="n">header</span><span class="p">,</span> <span class="n">content</span> <span class="o">=</span> <span class="n">doc_str</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">---</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">doc_fp</span><span class="p">):</span>
+            <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">doc_fp</span><span class="p">,</span> <span class="s2">&quot;w&quot;</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">&quot;utf-8&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+                <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">content</span><span class="p">)</span>
+</pre></div>
+
+<div class="output"><pre>105it [00:00, 106.86it/s]
+</pre></div>
+</div>
+<h4 id="optional-simplefoc-discourse">[Optional] SimpleFOC Discourse</h4>
+<p>There is also the SimpleFOC community forum <a href="https://community.simplefoc.com/">https://community.simplefoc.com/</a> that is hosted on discourse and provides useful information. The forum has many topics and can be quite long to dowload so we are gonna skip this for the moment, but if you are interested in including it you can set <code>load_discourse=True</code> in the below cell.</p>
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">glob</span>
+
+
+<span class="n">discourse_url</span> <span class="o">=</span> <span class="s2">&quot;https://community.simplefoc.com/&quot;</span>
+<span class="n">load_discourse</span> <span class="o">=</span> <span class="kc">False</span>
+
+<span class="k">if</span> <span class="n">load_discourse</span><span class="p">:</span>
+
+    <span class="c1"># already downloaded files</span>
+    <span class="n">data_list</span> <span class="o">=</span>  <span class="n">glob</span><span class="o">.</span><span class="n">glob</span><span class="p">(</span><span class="s1">&#39;./data/discourse_*.txt&#39;</span><span class="p">)</span>
+    <span class="n">data_list</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">data_list</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span><span class="nb">int</span><span class="p">(</span><span class="n">x</span><span class="p">[</span><span class="o">-</span><span class="mi">8</span><span class="p">:</span><span class="o">-</span><span class="mi">4</span><span class="p">]))</span>  <span class="c1"># sort data according to topic id</span>
+    <span class="n">last_topic_id</span> <span class="o">=</span> <span class="mi">0</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">data_list</span><span class="p">)</span><span class="o">==</span><span class="mi">0</span> <span class="k">else</span> <span class="nb">int</span><span class="p">(</span><span class="n">data_list</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="o">-</span><span class="mi">8</span><span class="p">:</span><span class="o">-</span><span class="mi">4</span><span class="p">])</span> <span class="c1"># last topic that have been downloaded locally</span>
+
+    <span class="c1"># download novel topics</span>
+    <span class="n">max_topic_id</span> <span class="o">=</span> <span class="mi">4631</span> <span class="c1"># increase if needed</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">tqdm</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="n">last_topic_id</span><span class="p">,</span> <span class="n">max_topic_id</span><span class="p">)):</span>
+
+        <span class="n">topic_url</span> <span class="o">=</span> <span class="n">discourse_url</span> <span class="o">+</span> <span class="sa">f</span><span class="s2">&quot;raw/</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="n">resp</span> <span class="o">=</span> <span class="n">urllib3</span><span class="o">.</span><span class="n">request</span><span class="p">(</span><span class="s2">&quot;GET&quot;</span><span class="p">,</span> <span class="n">topic_url</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">resp</span><span class="o">.</span><span class="n">status</span> <span class="o">==</span> <span class="mi">200</span><span class="p">:</span>
+
+            <span class="n">topic_fp</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;data/discourse_</span><span class="si">{</span><span class="n">i</span><span class="si">:</span><span class="s2">04d</span><span class="si">}</span><span class="s2">.txt&quot;</span>
+
+            <span class="n">topic_str</span> <span class="o">=</span> <span class="n">resp</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="s2">&quot;utf-8&quot;</span><span class="p">)</span>
+
+
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">topic_fp</span><span class="p">):</span>
+
+                <span class="c1"># filter topics if it has only one non-empty post</span>
+                <span class="n">topic_posts</span> <span class="o">=</span> <span class="n">topic_str</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">-------------------------</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">)</span>
+                <span class="n">topic_posts</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">)</span>
+                <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">topic_posts</span><span class="p">)</span> <span class="o">&lt;=</span> <span class="mi">2</span><span class="p">:</span>
+                    <span class="k">continue</span>
+
+                <span class="c1"># save topic_posts as doc</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">topic_fp</span><span class="p">,</span> <span class="s2">&quot;w&quot;</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">&quot;utf-8&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+                        <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">topic_str</span><span class="p">)</span>
+</pre></div>
+
+</div>
+<h4 id="loading-data-into-llamaindex">Loading Data into LlamaIndex</h4>
+<p>We can now load data from our local <code>data</code> folder into LlamaIndex using the <code>SimpleDirectoryReader</code> class which supports many file formats, including markdown.</p>
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">llama_index.core</span> <span class="kn">import</span> <span class="n">SimpleDirectoryReader</span>
+
+<span class="n">reader</span> <span class="o">=</span> <span class="n">SimpleDirectoryReader</span><span class="p">(</span><span class="n">input_dir</span><span class="o">=</span><span class="s2">&quot;./data&quot;</span><span class="p">)</span>
+<span class="n">documents</span> <span class="o">=</span> <span class="n">reader</span><span class="o">.</span><span class="n">load_data</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">documents</span><span class="p">))</span>
+</pre></div>
+
+<div class="output"><pre>105
+</pre></div>
+</div>
+<h3 id="2-process-data-as-chunks-of-tokens">2) Process data as chunks of tokens</h3>
+<p>LlamaIndex will take care of everything for step 2, 3 and 4, such that we only need to specify the desired hyperparameters for those steps.</p>
+<p>For step 2, pre-processing the data into chunks, we simply use a fixed-sized overlapping window method, dividing the text into chunks of fixed number of characters specified with <code>chunk_size</code> and overlapping by <code>chunk_overlap</code> characters.</p>
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">llama_index.core</span> <span class="kn">import</span> <span class="n">Settings</span>
+
+<span class="n">Settings</span><span class="o">.</span><span class="n">chunk_size</span> <span class="o">=</span> <span class="mi">512</span>
+<span class="n">Settings</span><span class="o">.</span><span class="n">chunk_overlap</span> <span class="o">=</span> <span class="mi">50</span>
+</pre></div>
+
+</div>
+<h3 id="3-embed-chunks-into-a-vectordb">3) Embed chunks into a VectorDB</h3>
+<p>Embedding is simply turning the chunks of text into numerical representations (embeddings). Note that these embeddings are <em>learned</em> representation vectors lying in high-dimensional space that capture semantic information of the words or phrases.</p>
+<p>There are many embedding models that are available on the HF hub. A good ressource to choose a model is to check the <a href="https://huggingface.co/spaces/mteb/leaderboard">Massive Text Embedding Benchmark (MTEB) Leaderboard</a> which lists the current best text embedding models out there on a variety of tasks. To select a proper embedding model you generally want to have a look at:</p>
+<ul>
+<li>Model Size (number of parameters): known only for open models, but this will impact speed/memory and we want to keep that relatively small in order to be able to run it fast on colab GPUs</li>
+<li>Embedding Dimension: dimensionality of the vector embedding</li>
+<li>Max tokens: max number of tokens that fit into the LLM input prompt, depending on this you will have to adapt the chunk size</li>
+<li>performance on tasks such that classification, clustering, retrieval, etc.</li>
+</ul>
+<p>Here we'll be using the <a href="https://huggingface.co/mixedbread-ai/mxbai-embed-large-v1">mxbai-embed-large-v1</a> model by mixed-bread-ai, which has 335M params, an embedding dimension of 1024 and can take a maximum of 512 tokens as input (which is exactly what we used as our chunk size).</p>
+<p>Once you have selected an embedding model from the HF hub, you simply need to specify it using the <code>embed_model</code> setting and <code>HuggingFaceEmbedding</code> wrapper.</p>
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">llama_index.embeddings.huggingface</span> <span class="kn">import</span> <span class="n">HuggingFaceEmbedding</span>
+
+<span class="n">Settings</span><span class="o">.</span><span class="n">embed_model</span> <span class="o">=</span> <span class="n">HuggingFaceEmbedding</span><span class="p">(</span><span class="n">model_name</span><span class="o">=</span><span class="s2">&quot;mixedbread-ai/mxbai-embed-large-v1&quot;</span><span class="p">)</span>
+</pre></div>
+
+<div class="output"><pre>/usr/local/lib/python3.10/dist-packages/huggingface_hub/utils/_token.py:88: UserWarning: 
+The secret `HF_TOKEN` does not exist in your Colab secrets.
+To authenticate with the Hugging Face Hub, create a token in your settings tab (https://huggingface.co/settings/tokens), set it as secret in your Google Colab and restart your session.
+You will be able to reuse this secret in all of your notebooks.
+Please note that authentication is recommended but still optional to access public models or datasets.
+  warnings.warn(
+</pre></div>
+</div>
+
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">llama_index.core</span> <span class="kn">import</span> <span class="n">VectorStoreIndex</span>
+
+<span class="n">index</span> <span class="o">=</span> <span class="n">VectorStoreIndex</span><span class="o">.</span><span class="n">from_documents</span><span class="p">(</span><span class="n">documents</span><span class="p">)</span>
+</pre></div>
+
+</div>
+<h3 id="4-setup-a-retrieval-system-using-vector-search">4) Setup a retrieval system using Vector Search</h3>
+<p>For step 4, LlamaIndex is again taking care of everything to build a query engine using Vector Search, we simply need to explicitly disable the use of OpenAI LLM (we will use a small open-source one in Step 6) and  need to specify is the desired <code>similarity_top_k</code> setting. Here we use <code>similarity_top_k=3</code>, meaning that we will retrieve the 3 closest embeddings from our VectorDB given the user's query embedding.</p>
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="n">Settings</span><span class="o">.</span><span class="n">llm</span> <span class="o">=</span> <span class="kc">None</span>
+
+<span class="n">similarity_top_k</span> <span class="o">=</span> <span class="mi">3</span>
+<span class="n">query_engine</span> <span class="o">=</span> <span class="n">index</span><span class="o">.</span><span class="n">as_query_engine</span><span class="p">(</span><span class="n">similarity_top_k</span><span class="o">=</span><span class="n">similarity_top_k</span><span class="p">)</span>
+</pre></div>
+
+<div class="output"><pre>LLM is explicitly disabled. Using MockLLM.
+</pre></div>
+</div>
+<p>Let's have a look at which chunks our query engine returns given the following user query <em>"Simplefoc compiles and I flush it to my board, but nothing moves. I use platformio, what could be the problem?"</em>. As a recall a good answer here should be to include the <code>lib_archive=False</code> information in the platformio.ini file, so we want the retrieval system to extract this information from the docs.</p>
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">IPython.display</span> <span class="kn">import</span> <span class="n">display</span><span class="p">,</span> <span class="n">Markdown</span>
+
+<span class="n">question</span> <span class="o">=</span> <span class="s2">&quot;Simplefoc compiles and I flush it to my board, but nothing moves. I use platformio, what could be the problem?&quot;</span>
+<span class="n">response</span> <span class="o">=</span> <span class="n">query_engine</span><span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="n">question</span><span class="p">)</span>
+
+<span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">similarity_top_k</span><span class="p">):</span>
+    <span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;# Retrieved Chunk </span><span class="si">{</span><span class="n">i</span><span class="o">+</span><span class="mi">1</span><span class="si">}</span><span class="s2"> (source </span><span class="si">{</span><span class="n">response</span><span class="o">.</span><span class="n">source_nodes</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">score</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">) </span><span class="se">\n</span><span class="s2"> </span><span class="si">{</span><span class="n">response</span><span class="o">.</span><span class="n">source_nodes</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">text</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">))</span>
+</pre></div>
+
+
+<div class="markdown-output">
+<h1>Retrieved Chunk 1 (source 0.76)</h1>
+<ol>
+<li>Click finish</li>
+</ol>
+<p>At this point, if it is the first project you are creating for this board, PlatformIO will download all the required compilers, tools and core library files. Depending on your internet speed, this can take quite a few minutes, so please be patient!</p>
+<h2>Add <span class="simple">Simple<span class="foc">FOC</span>library</span> to your project</h2>
+<p>When everything is finished installing, you should be presented with a view like this:</p>
+<p><img src="extras/Images/platformio_screenshot4.png" class="width80"></p>
+<p>You can now add the SimpleFOC library to the project:</p>
+<p><img src="extras/Images/platformio_screenshot5.png" class="width80">
+1. Click on the PlatformIO icon, and choose "Libraries" from the Menu
+2. Enter "Simple FOC" in the search
+3. Click on the library</p>
+<p><img src="extras/Images/platformio_screenshot6.png" class="width80">
+1. Click on "Add Library" to display the "Add Library" wizard</p>
+<p><img src="extras/Images/platformio_screenshot7.png" class="width50">
+1. Choose your project from the drop-down
+2. Click "Add" to add the library</p>
+<p>Cool! The SimpleFOC library is now associated with your project.</p>
+<h2>Configure your project</h2>
+<p>Open the platformio.ini file in the root directory of your project. It should look something like this, depending on the board you chose:</p>
+<p>```ini
+; PlatformIO Project Configuration File
+;
+;   Build options: build flags, source filter
+;   Upload options: custom upload port, speed and extra flags
+;   Library options: dependencies, extra library storages
+;   Advanced options: extra scripting
+;
+; Please visit documentation for the other options and examples
+; https://docs.platformio.org/page/projectconf.html</p>
+<p>[env:mkrwifi1010]
+platform = atmelsam
+board = mkrwifi1010
+framework = arduino
+lib_deps = askuric/Simple FOC@^2.2
+lib_archive = false
+```</p>
+<blockquote class='warning'>
+<p class='heading'>IMPORTANT! ⚠️</p>
+You have to add the line <code class='highlighter-rouge'>lib_archive = false</code> to make SimpleFOC compile correctly with PlatformIO.
+</div>
+<div class="markdown-output">
+<h1>Retrieved Chunk 2 (source 0.76)</h1>
+<p>⚠️</p>
+You have to add the line <code class='highlighter-rouge'>lib_archive = false</code> to make SimpleFOC compile correctly with PlatformIO.
+</blockquote></p>
+<p>You may also want to add some other options, like <em>monitor_speed</em> to set the serial port speed for debug output.</p>
+<p><code>ini
+monitor_speed = 115200</code></p>
+<p>The available options depend on your board, and we cannot cover them all here, but they are documented in PlatformIO's documentation.</p>
+<h2>Code away!</h2>
+<p>You can begin to write your code in the <em>src/main.cpp</em> file.</p>
+<h2>Youtube tutorial by <a href="https://github.com/owennewo">@owennewo</a></h2>
+<iframe class="youtube" src="https://www.youtube.com/embed/3B88qCny7Kg" frameborder="0" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+<h2>Advanced Usage</h2>
+<p>PlatformIO makes it easy for you to use the source version of the SimpleFOC library. This lets you modify the code, or use the most recent "dev" branch version of the library to try out new features before they are officially released.</p>
+<p>To use the source code version of the library, try the following steps:</p>
+<ol>
+<li>Using your favourite git client, clone the simplefoc library from https://github.com/simplefoc/Arduino-FOC.git</li>
+<li>This will create a folder "Arduino-FOC" on your file-system, containing the library source code</li>
+<li>Go to your PlatformIO project, and inside the project go to the lib folder. You can use your operating system's shell, or the built-in shell in Visual Studio Code.</li>
+<li>Inside the lib folder of your project, create a symlink to your Arduino-FOC folder<br/>
+Mac/Linux:<br/>
+<code>% ln -s /path/to/Arduino-FOC</code><br/>
+Windows:<br/>
+<code>% mklink /J Arduino-FOC C:\path\to\Arduino-FOC</code></li>
+</ol>
+<p>Note: If you had previously added the release version of the library to the project using PlatformIO's library management, you will have to remove this reference from the platformio.ini file</p>
+</div>
+<div class="markdown-output">
+<h1>Retrieved Chunk 3 (source 0.76)</h1>
+<p># Installing <span class="simple">Simple<span class="foc">FOC</span>library</span> with PlatformIO</p>
+<p>Using SimpleFOC from PlatformIO is not hard at all! The following instructions should get you set up and compiling your code in a matter of minutes.</p>
+<h2>Quick setup for pros</h2>
+<p>You can use SimpleFOC in Arduino projects in PlatformIO. Just add the library via the library manager.</p>
+<p><b>You will need this option in your platformio.ini file:</b>
+<code>ini
+lib_archive = false</code></p>
+<h1>Detailed instructions</h1>
+<h2>Prerequisites</h2>
+<ul>
+<li>You need an active internet connection throughout this process, until your project is set up.</li>
+<li>First, install <a href="https://code.visualstudio.com/download">Visual Studio Code</a></li>
+<li>Run Visual Studio Code, and install PlatformIO using the Extensions Manager:</li>
+</ul>
+<p><img src="extras/Images/platformio_screenshot1.png"  class="width80">
+1. Select extension manager
+2. Enter "PlatformIO" in the search
+3. Choose PlatformIO extension from the list (should be the first result)
+4. Click install - after a few moments PlatformIO will be installed, you will be prompted to reload Visual Studio Code</p>
+<p>Congratulations, you're ready to start your first project!</p>
+<h2>Creating a project</h2>
+<p>To create a new project that uses SimpleFOC, use the following steps:</p>
+<p><img src="extras/Images/platformio_screenshot2.png" class="width80">
+1. Select the PlatformIO Menu on the left sidebar
+2. Choose Open to open the platformIO home screen
+3. Click "New Project"</p>
+<p>You will be taken to the new project wizard:</p>
+<p><img src="extras/Images/platformio_screenshot3.png" class="width50">
+1. Give your project a name, e.g. simplefoc_test_project
+2. Choose your board. SimpleFOC supports many MCU architectures, see [hardware/mcus]
+3. Once you have chosen your board, make sure the Framework "Arduino" is selected. PlatformIO supports other Frameworks, but SimpleFOC is an Arduino Library and must be run in Arduino framework.
+4. Click finish</p>
+<p>At this point, if it is the first project you are creating for this board, PlatformIO will download all the required compilers, tools and core library files.</p>
+</div></div>
+<p>👉 We can see that here RAG did a pretty good job at retrieving relevant information and in fact the instruction to set <code>lib_archive = false</code> is present in all 3 retrived chunks, so the LLM should be able to incorporate this in its answer if everything goes well.</p>
+<h3 id="5-import-the-llm">5) Import the LLM</h3>
+<p>Choosing the right LLM can be hard, but we are usually quite constrained in our choices depending on the GPUs hardware that we have at our disposal.
+Here I'm simply using a colab free-access which has 16GB of RAM.</p>
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="c1"># Get GPU available memory</span>
+<span class="kn">import</span> <span class="nn">torch</span>
+<span class="n">gpu_memory_bytes</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_properties</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">total_memory</span>
+<span class="n">gpu_memory_gb</span> <span class="o">=</span> <span class="nb">round</span><span class="p">(</span><span class="n">gpu_memory_bytes</span> <span class="o">/</span> <span class="p">(</span><span class="mi">2</span><span class="o">**</span><span class="mi">30</span><span class="p">))</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Available GPU memory: </span><span class="si">{</span><span class="n">gpu_memory_gb</span><span class="si">}</span><span class="s2"> GB&quot;</span><span class="p">)</span>
+</pre></div>
+
+<div class="output"><pre>Available GPU memory: 15 GB
+</pre></div>
+</div>
+<p>Given 16GB of memory is relatively small we have to stick with small and likely <em>quantized</em> models. There are different types of quantization methods and one of them is known as <strong>GPTQ</strong>, a post-training quantization (PTQ) method that enable to compress all the weights of these models to a <strong>4-bit precision</strong> that can efficiently run on GPUs.
+You can find many of these quantized models into the HF Hub, in particular you can check collections from <a href="https://huggingface.co/TheBloke">The Bloke AI</a> which for instance contains <a href="https://huggingface.co/TheBloke/Llama-2-7B-Chat-GPTQ">Llama-2-7B-Chat-GPTQ</a>, <a href="https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.2-GPTQ">Mistral-7B-Instruct-v0.2-GPTQ</a> and <a href="https://huggingface.co/TheBloke/zephyr-7B-beta-GPTQ">zephyr-7B-beta-GPTQ</a>.
+👉 For a deeper dive into GPTQ you can check out <a href="https://towardsdatascience.com/4-bit-quantization-with-gptq-36b0f4f02c34">this blog</a></p>
+<p>Let's import <strong>Mistral-7B-Instruct-v0.2-GPTQ</strong> with its corresponding tokenizer.</p>
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="c1"># load fine-tuned model from hub</span>
+<span class="kn">from</span> <span class="nn">transformers</span> <span class="kn">import</span> <span class="n">AutoModelForCausalLM</span><span class="p">,</span> <span class="n">AutoTokenizer</span>
+<span class="kn">from</span> <span class="nn">auto_gptq</span> <span class="kn">import</span> <span class="n">exllama_set_max_input_length</span>
+
+<span class="n">model_name</span> <span class="o">=</span> <span class="s2">&quot;TheBloke/Mistral-7B-Instruct-v0.2-GPTQ&quot;</span>
+<span class="n">model</span> <span class="o">=</span> <span class="n">AutoModelForCausalLM</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="n">model_name</span><span class="p">,</span>
+                                             <span class="n">device_map</span><span class="o">=</span><span class="s2">&quot;auto&quot;</span><span class="p">,</span>
+                                             <span class="n">trust_remote_code</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                                             <span class="n">revision</span><span class="o">=</span><span class="s2">&quot;main&quot;</span><span class="p">)</span>
+<span class="n">model</span> <span class="o">=</span> <span class="n">exllama_set_max_input_length</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="mi">8192</span><span class="p">)</span>
+
+<span class="c1"># load tokenizer</span>
+<span class="n">tokenizer</span> <span class="o">=</span> <span class="n">AutoTokenizer</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="n">model_name</span><span class="p">,</span> <span class="n">use_fast</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+
+<span class="c1"># put the model in eval mode as we are only gonna use it for inference</span>
+<span class="n">model</span><span class="o">.</span><span class="n">eval</span><span class="p">()</span>
+</pre></div>
+
+<div class="output"><pre>/usr/local/lib/python3.10/dist-packages/transformers/modeling_utils.py:4193: FutureWarning: `_is_quantized_training_enabled` is going to be deprecated in transformers 4.39.0. Please use `model.hf_quantizer.is_trainable` instead
+  warnings.warn(
+</pre></div>
+</div>
+<p>Let's print some model statistics.</p>
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="c1"># Get model number of parameters</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Model has </span><span class="si">{</span><span class="nb">sum</span><span class="p">([</span><span class="n">param</span><span class="o">.</span><span class="n">numel</span><span class="p">()</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">param</span><span class="w"> </span><span class="ow">in</span><span class="w"> </span><span class="n">model</span><span class="o">.</span><span class="n">parameters</span><span class="p">()])</span><span class="si">}</span><span class="s2"> parameters&quot;</span><span class="p">)</span>
+
+<span class="c1"># Get model parameters and buffer sizes</span>
+<span class="n">mem_params</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">([</span><span class="n">param</span><span class="o">.</span><span class="n">nelement</span><span class="p">()</span> <span class="o">*</span> <span class="n">param</span><span class="o">.</span><span class="n">element_size</span><span class="p">()</span> <span class="k">for</span> <span class="n">param</span> <span class="ow">in</span> <span class="n">model</span><span class="o">.</span><span class="n">parameters</span><span class="p">()])</span>
+<span class="n">mem_buffers</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">([</span><span class="n">buf</span><span class="o">.</span><span class="n">nelement</span><span class="p">()</span> <span class="o">*</span> <span class="n">buf</span><span class="o">.</span><span class="n">element_size</span><span class="p">()</span> <span class="k">for</span> <span class="n">buf</span> <span class="ow">in</span> <span class="n">model</span><span class="o">.</span><span class="n">buffers</span><span class="p">()])</span>
+
+<span class="c1"># Calculate model sizes</span>
+<span class="n">model_mem_bytes</span> <span class="o">=</span> <span class="n">mem_params</span> <span class="o">+</span> <span class="n">mem_buffers</span>
+<span class="n">model_mem_gb</span> <span class="o">=</span> <span class="n">model_mem_bytes</span> <span class="o">/</span> <span class="p">(</span><span class="mi">1024</span><span class="o">**</span><span class="mi">3</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Model memory (GB): </span><span class="si">{</span><span class="n">model_mem_gb</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+
+<div class="output"><pre>Model has 262410240 parameters
+Model memory (GB): 4.3729400634765625
+</pre></div>
+</div>
+<h3 id="6-augment-input-prompt">6) Augment Input Prompt</h3>
+<p>Now we need to do a bit of prompt-engineering work to decide what we will send as input to the LLM. In this notebook, we'll be using a quantized version of Mistral7B-Instruct. To effectively prompt the Mistral 7B Instruct and get optimal outputs, it's recommended to use the following chat template:</p>
+<p><code>&lt;s&gt;[INST] Instruction [/INST] Model answer&lt;/s&gt;[INST] Follow-up instruction [/INST]</code></p>
+<p><code>&lt;s&gt;</code> and <code>&lt;/s&gt;</code> are special tokens indicating beginning of string (BOS) and end of string (EOS), while <code>[INST]</code> and <code>[/INST]</code> are regular strings used to delimitate the instruction/query. We can apply this template by hand, or use the <code>apply_chat_emplate</code> method from the transformers package which is what is done here.</p>
+<p>Now a main question here is how to augment the prompt with the retrived chunks such that the LLM can use them most effectively. There are many different tricks to do proper prompt-engineering, most of them being referenced on <a href="https://www.promptingguide.ai/">this prompting guide</a> but what I did here is simply use the <a href="https://api.together.xyz/signin">together.ai</a> API to try different prompts "by hand" and select the one I was most happy with (<code>base_prompt</code> as shown in below cell). As you can see I basically insisted to use the information from the retrieved chunks (and even solely this information) because I felt that that generic LLMs such as Mistral-instruct tend to provide generic answers which is not what we are looking for here. To do so I added a minimal chain-of-thought (CoT) prompting by asking the model to extract relevant information from the provided context items and to reformulate their content in a clear, accessible and consise manner. I also ask the LLM to not mention these context items (because the RAG pipeline would ultimately be hidden to the user) and to directly refer to the online docs. Finally I ask the LLM to sign with "SimpleFOC_AI" so that users know that the answer is generated by an AI.</p>
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">create_prompt</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">context_items</span><span class="p">):</span>
+    <span class="n">context</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+    <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">context_item</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">context_items</span><span class="p">):</span>
+        <span class="n">context</span> <span class="o">+=</span> <span class="sa">f</span><span class="s2">&quot;# Context item </span><span class="si">{</span><span class="n">i</span><span class="o">+</span><span class="mi">1</span><span class="si">}</span><span class="s2"> </span><span class="se">\n</span><span class="s2"> </span><span class="si">{</span><span class="n">context_item</span><span class="si">}</span><span class="s2"> </span><span class="se">\n\n</span><span class="s2">&quot;</span>
+
+    <span class="n">base_prompt</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;You are SimpleFOC_AI, a virtual assistant that answer user queries on the SimpleFOC forum.</span>
+<span class="s2">    To do so, you extract relevant information from the SimpleFOC documentation context items provided below, and reformulate their content in a clear and accessible manner. </span><span class="se">\</span>
+<span class="s2">    Your answer is as concise and explanatory as possible, and based solely on the information provided in the context items.</span>
+<span class="s2">    Keep in mind that the user does not know about this context so your answer cannot mention these &quot;items&quot;.</span>
+<span class="s2">    Finally your answer should start with the &quot;SimpleFOC_AI&quot; signature and refer to the SimpleFOC documentation (https://docs.simplefoc.com/)  when needed.</span>
+
+<span class="s2">    </span><span class="se">\n\n</span><span class="si">{context}</span>
+
+<span class="s2">    </span><span class="se">\n\n</span><span class="s2">User query: </span><span class="si">{query}</span>
+<span class="s2">&quot;&quot;&quot;</span>
+
+    <span class="n">base_prompt</span> <span class="o">=</span> <span class="n">base_prompt</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">context</span><span class="o">=</span><span class="n">context</span><span class="p">,</span>
+                                     <span class="n">query</span><span class="o">=</span><span class="n">query</span><span class="p">)</span>
+
+    <span class="c1"># Create prompt template for instruction-tuned model</span>
+    <span class="n">dialogue_template</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="p">{</span><span class="s2">&quot;role&quot;</span><span class="p">:</span> <span class="s2">&quot;user&quot;</span><span class="p">,</span>
+         <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="n">base_prompt</span><span class="p">}</span>
+    <span class="p">]</span>
+
+    <span class="c1"># Apply the chat template</span>
+    <span class="n">prompt</span> <span class="o">=</span> <span class="n">tokenizer</span><span class="o">.</span><span class="n">apply_chat_template</span><span class="p">(</span><span class="n">conversation</span><span class="o">=</span><span class="n">dialogue_template</span><span class="p">,</span>
+                                           <span class="n">tokenize</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                                           <span class="n">add_generation_prompt</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">prompt</span>
+
+<span class="c1"># Format our prompt</span>
+<span class="n">prompt</span> <span class="o">=</span> <span class="n">create_prompt</span><span class="p">(</span><span class="n">query</span><span class="o">=</span><span class="n">question</span><span class="p">,</span>
+                          <span class="n">context_items</span><span class="o">=</span><span class="p">[</span><span class="n">response</span><span class="o">.</span><span class="n">source_nodes</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">text</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">similarity_top_k</span><span class="p">)])</span>
+<span class="c1"># display(Markdown(prompt[3:]))</span>
+</pre></div>
+
+</div>
+<p>Great, we are now ready to pass our augmented prompt to the LLM and see what it returns. Note that there are few important parameters that we can tune here for generating an answer with the LLM, in particular:</p>
+<ul>
+<li>do_sample: enable sampling-based decoding strategies and there are many of them such as<ul>
+<li>Multinomial sampling: randomly selects the next token based on the probability distribution over the entire vocabulary, and this is what we use here by default (instead of greedily selecting the one with max predicted probability)</li>
+<li>Top-k sampling (select only a portion of the top-k logits before applying softmax to gain compute efficiency)</li>
+<li>Top-p sampling (given the softmax-predicted probabilities only consider the most likely tokens whose cummulated probabilities &gt; p)</li>
+<li>I recommend <a href="https://huyenchip.com/2024/01/16/sampling">this blogpost</a> for more information on sampling strategies</li>
+</ul>
+</li>
+<li>temperature: parameters that is used to scale the logits (outputs of the LLM) before they are fed to softmax sampling such that a temperature of 0 will result in deterministic outputs (softmax+$\tau=0$ &lt;=&gt; hard max) and a higher temperature will result in more diverse/creative outputs. We generally consider $0&lt;\tau&lt;1$.</li>
+</ul>
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="c1"># we have to reduce the prompt has this dont fit into context</span>
+<span class="n">prompt</span> <span class="o">=</span> <span class="n">create_prompt</span><span class="p">(</span><span class="n">query</span><span class="o">=</span><span class="n">question</span><span class="p">,</span>
+                          <span class="n">context_items</span><span class="o">=</span><span class="p">[</span><span class="n">response</span><span class="o">.</span><span class="n">source_nodes</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">text</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">3</span><span class="p">)])</span>
+
+<span class="n">inputs</span> <span class="o">=</span> <span class="n">tokenizer</span><span class="p">(</span><span class="n">prompt</span><span class="p">,</span> <span class="n">return_tensors</span><span class="o">=</span><span class="s2">&quot;pt&quot;</span><span class="p">)</span>
+<span class="n">outputs</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">generate</span><span class="p">(</span><span class="n">input_ids</span><span class="o">=</span><span class="n">inputs</span><span class="p">[</span><span class="s2">&quot;input_ids&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">),</span>
+                         <span class="n">temperature</span><span class="o">=</span><span class="mf">0.7</span><span class="p">,</span>
+                         <span class="n">do_sample</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                         <span class="n">max_new_tokens</span><span class="o">=</span><span class="mi">512</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="n">tokenizer</span><span class="o">.</span><span class="n">batch_decode</span><span class="p">(</span><span class="n">outputs</span><span class="p">)[</span><span class="mi">0</span><span class="p">][</span><span class="nb">len</span><span class="p">(</span><span class="s2">&quot;&lt;s&gt; &quot;</span><span class="o">+</span><span class="n">prompt</span><span class="p">):</span><span class="o">-</span><span class="nb">len</span><span class="p">(</span><span class="s2">&quot;&lt;/s&gt;&quot;</span><span class="p">)])</span>
+</pre></div>
+
+<div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+<div class="output"><pre> SimpleFOC_AI: I'm sorry to hear that you're experiencing issues with SimpleFOC not moving your motor after compiling and flashing through PlatformIO. Here are a few suggestions to help you troubleshoot the problem:
+
+1. Check your wiring: Make sure all your motor connections are correct and properly connected to the board. Double-check the motor polarities, ground, and power connections.
+
+2. Verify your motor configuration: Review the SimpleFOC library documentation (<https://docs.simplefoc.com/>) and ensure that the motor configuration in your code matches your motor setup. The library supports various motor types and configurations, so it's essential to choose the correct one.
+
+3. Check your motor parameters: In your code, the SimpleFOC library requires specific motor parameters, such as motor type, RPM, phase resistances, and inductances. Ensure all these parameters are correctly set for your motor.
+
+4. Debugging: Use the Serial Monitor in Visual Studio Code (or another terminal) to check for any error messages or issues in your code. You can also add debug statements to your code to inspect variables or motor states.
+
+5. Firmware version: Ensure you are using the latest SimpleFOC library version that supports your motor and board. Sometimes compatibility issues can cause problems. You can check for the latest library release on GitHub (<https://github.com/simplefoc/Arduino-FOC/releases>).
+
+6. PlatformIO configuration: Double-check your platformio.ini file for any misconfigurations or missing settings. Ensure the 'lib_archive' option is set to 'false' as required for SimpleFOC.
+
+7. Hardware issues: If all the above steps do not help, consider checking your hardware for any defects. Try using a different motor or board to rule out any hardware-related issues.
+
+If you still cannot find a solution, you can reach out to the SimpleFOC community for help on their official forum (<https://discourse.simplefoc.com/>) or contact the SimpleFOC team for further assistance.
+</pre></div>
+</div>
+<p>Cool, there is the desired information (check <code>lib_archive=false</code> option in the <code>platform.ini</code> file) and the answer is correct and useful 😀</p>
+<p>However there are still room for improvement: the important information appears quite late in the answer (point 6) and when we do several samples the answer is not alway as good...</p>
+<h2 id="evaluation">Evaluation 🤔</h2>
+<p>We are now ready to test our RAG pipeline + LLM on a test set of user queries to see how good of a SimpleFOC AI Assistant we've made...</p>
+<p>For each query, we'll pass it three times (<code>n_samples=3</code>) to the LLM to the generated outputs.</p>
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="n">n_samples</span> <span class="o">=</span> <span class="mi">3</span>
+</pre></div>
+
+</div>
+<h3 id="test-1">Test 1</h3>
+<p>We are first testing whether our RAG pipeline can retrive the info from <a href="https://docs.simplefoc.com/microcontrollers#choosing-the-microcontroller">this section</a> (first table).</p>
+<p>The answers should be the following:</p>
+<ul>
+<li>"Is arduino Uno able to produce 6pwm signals with simplefoc?" -&gt; should say YES  </li>
+<li>"Can esp8266 chip be used to drive 6pwm drivers with simplefoc?" -&gt; should say  NO</li>
+</ul>
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="n">questions</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;Is arduino Uno able to produce 6pwm signals with simplefoc?&quot;</span><span class="p">,</span>
+          <span class="s2">&quot;Can esp8266 chip be used to drive 6pwm drivers with simplefoc?&quot;</span><span class="p">]</span>
+</pre></div>
+
+</div>
+
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="k">for</span> <span class="n">question</span> <span class="ow">in</span> <span class="n">questions</span><span class="p">:</span>
+
+    <span class="n">response</span> <span class="o">=</span> <span class="n">query_engine</span><span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="n">question</span><span class="p">)</span>
+
+    <span class="n">prompt</span> <span class="o">=</span> <span class="n">create_prompt</span><span class="p">(</span><span class="n">query</span><span class="o">=</span><span class="n">question</span><span class="p">,</span>
+                            <span class="n">context_items</span><span class="o">=</span><span class="p">[</span><span class="n">response</span><span class="o">.</span><span class="n">source_nodes</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">text</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">3</span><span class="p">)])</span>
+
+    <span class="n">inputs</span> <span class="o">=</span> <span class="n">tokenizer</span><span class="p">(</span><span class="n">prompt</span><span class="p">,</span> <span class="n">return_tensors</span><span class="o">=</span><span class="s2">&quot;pt&quot;</span><span class="p">)</span>
+
+    <span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;## User Question: </span><span class="si">{</span><span class="n">question</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">))</span>
+    <span class="k">for</span> <span class="n">sample_idx</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_samples</span><span class="p">):</span>
+        <span class="n">outputs</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">generate</span><span class="p">(</span><span class="n">input_ids</span><span class="o">=</span><span class="n">inputs</span><span class="p">[</span><span class="s2">&quot;input_ids&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">),</span>
+                                <span class="n">temperature</span><span class="o">=</span><span class="mf">0.7</span><span class="p">,</span>
+                                <span class="n">do_sample</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                <span class="n">max_new_tokens</span><span class="o">=</span><span class="mi">1024</span><span class="p">)</span>
+        <span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;### Output </span><span class="si">{</span><span class="n">sample_idx</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">))</span>
+        <span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="n">tokenizer</span><span class="o">.</span><span class="n">batch_decode</span><span class="p">(</span><span class="n">outputs</span><span class="p">)[</span><span class="mi">0</span><span class="p">][</span><span class="nb">len</span><span class="p">(</span><span class="s2">&quot;&lt;s&gt; &quot;</span><span class="o">+</span><span class="n">prompt</span><span class="p">):</span><span class="o">-</span><span class="nb">len</span><span class="p">(</span><span class="s2">&quot;&lt;/s&gt;&quot;</span><span class="p">)]))</span>
+</pre></div>
+
+
+<div class="markdown-output">
+<h2>User Question: Is arduino Uno able to produce 6pwm signals with simplefoc?</h2>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 0</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: I'm here to help answer your SimpleFOC-related queries using information from the official documentation. Based on the context you've provided, Arduino Uno has only 4 PWM pins, which is not enough to implement a 6-phase motor control. Therefore, it's not possible to generate 6 PWM signals for motor control with SimpleFOC on an Arduino Uno.</p>
+<p>For more details on the specifications of various development boards, you can refer to the documentation or the table you've shared. If you have any other questions about SimpleFOC or its usage, feel free to ask!</p>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 1</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: I'm SimpleFOC_AI, your helpful assistant from the SimpleFOC documentation.</p>
+<p>Regarding your query, the Arduino Uno board has only 4 PWM pins, which is not sufficient for a 6-phase motor control setup. Therefore, it is not possible to implement 6PWM motor control using the SimpleFOC library on an Arduino Uno.</p>
+<p>However, you can still use the Arduino Uno with SimpleFOC for motor control applications with less than 6 phases, or you can explore alternative hardware options with more PWM channels if you need a 6-phase motor setup.</p>
+<p>For more information about SimpleFOC and its compatibility with different boards, please refer to the <a href="https://docs.simplefoc.com/">SimpleFOC documentation</a>.</p>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 2</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: I'm SimpleFOC_AI, your helpful assistant for SimpleFOC-related queries. Based on the provided context, an Arduino Uno can use hardware interrupts for encoder setup with SimpleFOC library. However, it only has 4 PWM pins, which is not enough to implement a 6-phase motor control. Therefore, Arduino Uno cannot produce 6 PWM signals for motor control using SimpleFOC directly.</p>
+<p>For more information, I encourage you to explore the SimpleFOC documentation at <a href="https://docs.simplefoc.com/">https://docs.simplefoc.com/</a>. If you have any other questions, feel free to ask!</p>
+</div>
+<div class="markdown-output">
+<h2>User Question: Can esp8266 chip be used to drive 6pwm drivers with simplefoc?</h2>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 0</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: I'm here to help answer any SimpleFOC-related queries based on the available documentation. The context provided indicates that ESP8266 chips come with only 4 PWM pins and one analog input. Based on SimpleFOC library requirements, the 6PWM motor control and FOC current control cannot be implemented on ESP8266 chips due to this limitation. However, ESP32 chips, which have more PWM pins and are also supported by SimpleFOC, are recommended for driving 6PWM drivers with the library. For more information, visit the SimpleFOC documentation at <a href="https://docs.simplefoc.com/">https://docs.simplefoc.com/</a>.</p>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 1</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: I'm here to help answer any queries you have regarding the SimpleFOC library. Based on the information provided, ESP8266 chips do not fully meet the requirements for using 6PWM motor control with SimpleFOC. These chips have only 4 PWM pins, which limits the number of channels that can be used for motor control. Additionally, they only have one analog input, making current control not possible.</p>
+<p>If you need more information about SimpleFOC or require assistance with a specific issue, please refer to the SimpleFOC documentation available at <a href="https://docs.simplefoc.com/">https://docs.simplefoc.com/</a>. For ESP32 chips, they support MCPWM interface and can handle two 6PWM drivers, but each pin can be used in PWM mode, as long as you avoid using pins with predefined states on boot.</p>
+<p>Please note that the support for ESP8266 chips in SimpleFOC is still in the initial stages and may have some limitations. However, you can always consider using other boards that meet the full requirements for 6PWM motor control with SimpleFOC, such as the ESP32 boards mentioned above.</p>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 2</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: I'm here to help answer your query regarding using an ESP8266 chip with SimpleFOC for 6PWM driver control.</p>
+<p>According to the information available in the SimpleFOC documentation, ESP8266 chips have only 4 PWM pins, whereas the 6PWM motor control and FOC current control both require more PWM pins than that. Therefore, ESP8266 chips are not currently supported for 6PWM driver control using SimpleFOC.</p>
+<p>For more information on SimpleFOC, please refer to the official documentation at <a href="https://docs.simplefoc.com/">https://docs.simplefoc.com/</a>. If you have any other questions, feel free to ask!</p>
+</div></div>
+<p>👉 For the first question, unfortunately all outputs are incorrect hallucinations 😓 Indeed they all suggest thar Arduino UNO is not able to produce 6pwm signals with SimpleFOC, whereas it actually is. Looking at the RAG retrieved items for this query, we see that it retrived a chunk coming from <a href="https://docs.simplefoc.com/esp_mcu#esp8266-boards-support">this part</a> of the documentation about ESP8266 which says that "These boards have only 4 pwm pins so the 6PWM motor control cannot be implemented" and cutting the previous info that this is ESP8266 and not Arduino UNO, which is likely the cause of hallucinations here.</p>
+<p>👉 For the second question however the generated answers are very good, providing correct information and refering to the docs for additional information which is great (and better to what we got with chatGPT at the beginning).</p>
+<h3 id="test-2">Test 2</h3>
+<p>We are also testing whether our RAG pipeline can retrive info from the third table from the same section.</p>
+<p>The answers should be the following:</p>
+<ul>
+<li>"Does simplefoc implement low-side current sensing for stm32 microcontroller l4 family?" --&gt; should say YES</li>
+<li>"Does simplefoc implement low-side current sensing for stm32 microcontroller h7 family?" --&gt; should say YES</li>
+<li>"Does simplefoc implement low-side current sensing for teensy microcontrollers?" --&gt; should say NO</li>
+</ul>
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="n">questions</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;Does simplefoc implement low-side current sensing for stm32 microcontroller l4 family?&quot;</span><span class="p">,</span>
+             <span class="s2">&quot;Does simplefoc implement low-side current sensing for stm32 microcontroller h7 family?&quot;</span><span class="p">,</span>
+             <span class="s2">&quot;Does simplefoc implement low-side current sensing for teensy microcontrollers?&quot;</span><span class="p">]</span>
+</pre></div>
+
+</div>
+
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="k">for</span> <span class="n">question</span> <span class="ow">in</span> <span class="n">questions</span><span class="p">:</span>
+
+    <span class="n">response</span> <span class="o">=</span> <span class="n">query_engine</span><span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="n">question</span><span class="p">)</span>
+
+    <span class="n">prompt</span> <span class="o">=</span> <span class="n">create_prompt</span><span class="p">(</span><span class="n">query</span><span class="o">=</span><span class="n">question</span><span class="p">,</span>
+                            <span class="n">context_items</span><span class="o">=</span><span class="p">[</span><span class="n">response</span><span class="o">.</span><span class="n">source_nodes</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">text</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">3</span><span class="p">)])</span>
+
+    <span class="n">inputs</span> <span class="o">=</span> <span class="n">tokenizer</span><span class="p">(</span><span class="n">prompt</span><span class="p">,</span> <span class="n">return_tensors</span><span class="o">=</span><span class="s2">&quot;pt&quot;</span><span class="p">)</span>
+
+    <span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;## User Question: </span><span class="si">{</span><span class="n">question</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">))</span>
+    <span class="k">for</span> <span class="n">sample_idx</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_samples</span><span class="p">):</span>
+        <span class="n">outputs</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">generate</span><span class="p">(</span><span class="n">input_ids</span><span class="o">=</span><span class="n">inputs</span><span class="p">[</span><span class="s2">&quot;input_ids&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">),</span>
+                                <span class="n">temperature</span><span class="o">=</span><span class="mf">0.7</span><span class="p">,</span>
+                                <span class="n">do_sample</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                <span class="n">max_new_tokens</span><span class="o">=</span><span class="mi">1024</span><span class="p">)</span>
+        <span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;### Output </span><span class="si">{</span><span class="n">sample_idx</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">))</span>
+        <span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="n">tokenizer</span><span class="o">.</span><span class="n">batch_decode</span><span class="p">(</span><span class="n">outputs</span><span class="p">)[</span><span class="mi">0</span><span class="p">][</span><span class="nb">len</span><span class="p">(</span><span class="s2">&quot;&lt;s&gt; &quot;</span><span class="o">+</span><span class="n">prompt</span><span class="p">):</span><span class="o">-</span><span class="nb">len</span><span class="p">(</span><span class="s2">&quot;&lt;/s&gt;&quot;</span><span class="p">)]))</span>
+</pre></div>
+
+
+<div class="markdown-output">
+<h2>User Question: Does simplefoc implement low-side current sensing for stm32 microcontroller l4 family?</h2>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 0</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: The SimpleFOC library currently supports low-side current sensing on certain members of the STM32 microcontroller family, specifically the f1, f4, and g4 families. Unfortunately, the l4 family is not mentioned in the documentation. Therefore, I cannot confirm whether it is supported or not with certainty. For the most accurate and up-to-date information, please refer to the SimpleFOC documentation at <a href="https://docs.simplefoc.com/">https://docs.simplefoc.com/</a>.</p>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 1</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: I'm here to help answer queries related to the SimpleFOC library. Based on the provided context, the current sensing support for the STM32 microcontroller family includes STM32f1, STM32f4, and STM32g4, which all support low-side current sensing for one motor. However, I cannot confirm if the STM32 L4 family is currently supported for low-side current sensing in SimpleFOC. For the most accurate and up-to-date information, you should refer to the SimpleFOC documentation available at <a href="https://docs.simplefoc.com/">https://docs.simplefoc.com/</a>.</p>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 2</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: The SimpleFOC library currently supports low-side current sensing for some STM32 microcontroller families like f1, f4, and g4. However, I cannot confirm if it specifically supports the L4 family at this moment. I recommend checking the latest documentation on the SimpleFOC website (<a href="https://docs.simplefoc.com/">https://docs.simplefoc.com/</a>) for the most accurate information regarding the specific STM3 microcontroller family L4.</p>
+</div>
+<div class="markdown-output">
+<h2>User Question: Does simplefoc implement low-side current sensing for stm32 microcontroller h7 family?</h2>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 0</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: The SimpleFOC library supports low-side current sensing for some STM32 microcontroller families, including the STM32 H7. However, it's essential to note that the current sensing functionality is limited to one motor for this microcontroller family. For more information about the supported MCUs and their current sensing capabilities, please refer to the SimpleFOC documentation on https://docs.simplefoc.com/.</p>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 1</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: I'm glad you're interested in SimpleFOC's current sensing capabilities with the STM32 H7 microcontroller family. According to the SimpleFOC documentation, low-side current sensing is supported for the STM32 H7 family, specifically on the B-G431B-ESC1 board. However, the documentation also states that the SAMD21 architecture is under development and its low-side current sensing implementation is not yet fully tested, so I would recommend exercising caution when relying on it.</p>
+<p>Since you've asked about low-side current sensing specifically for the STM32 H7 family, I'd like to clarify that this architecture supports one motor with low-side current sensing. Keep in mind that low-side current sensing requires a very high synchronization between the PWM generated by the driver and the ADC triggering, so it's important to consider the PWM frequency and the PWM pins when choosing the driver parameters.</p>
+<p>For more information, you can refer to the SimpleFOC documentation on current sensing (<a href="https://docs.simplefoc.com/current-sensing/">https://docs.simplefoc.com/current-sensing/</a>) and the MCU support page (<a href="https://docs.simplefoc.com/MCU-support/">https://docs.simplefoc.com/MCU-support/</a>).</p>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 2</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: The SimpleFOC library currently supports low-side current sensing for the STM32 microcontroller families f1, f4, and g4, but not for H7. You can refer to the SimpleFOC documentation at <a href="https://docs.simplefoc.com/">https://docs.simplefoc.com/</a> for more detailed information on the currently supported MCUs and current sensing methods.</p>
+</div>
+<div class="markdown-output">
+<h2>User Question: Does simplefoc implement low-side current sensing for teensy microcontrollers?</h2>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 0</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: I'm glad you're interested in SimpleFOC and its current sensing capabilities. Based on the information available in the provided context items, SimpleFOC currently does not support low-side current sensing for Teensy microcontrollers. If you have any other questions about SimpleFOC or its features, feel free to ask! For more details on SimpleFOC and its current sensing approaches, please refer to the official documentation at <a href="https://docs.simplefoc.com/">https://docs.simplefoc.com/</a>.</p>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 1</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: I'm glad you're interested in current sensing options with SimpleFOC! Based on the provided context, I see that low-side current sensing is supported on several microcontroller units (MCUs), but unfortunately, Teensy microcontrollers are not currently among them. I recommend checking the SimpleFOC documentation for the latest supported MCUs and their respective current sensing options at <a href="https://docs.simplefoc.com/">https://docs.simplefoc.com/</a>.</p>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 2</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: I'm glad you're interested in using the SimpleFOC library for your Teensy microcontroller project. Regarding your question, the current version of SimpleFOC does not support low-side current sensing for Teensy microcontrollers. The library currently supports in-line current sensing for this platform. However, the development team aims to make SimpleFOC as interchangeable as possible across different drivers and platforms, so new features and improvements, including low-side current sensing for Teensy, may be added in future releases. Be sure to check the SimpleFOC documentation at <a href="https://docs.simplefoc.com/">https://docs.simplefoc.com/</a> for the latest information.</p>
+</div></div>
+<p>👉 For the question about low-side sensing support for the stm32 l4 family, the answers does not convey confidently that they support low-side sensing (which is the case), but what I like is that they neither convey the feeling that they don't support it but rather that the AI assistant is uncertain about this query, and that user should check the SimpleFOC website for more accurate informationn which is much better than hallucinating false information. Actually here when we look at the retrieved information from the docs, we understand why the LLM is uncertain as the information is not so clearly explained in the docs. For instance it is emphasized that Stm32 f1, f4 and g4 families support low-side sensing for only one motor which looks like it <em>implicitely</em> suggests that Stm32 l4 family does not support low-side support in contrast, whether what it actually suggests is that l4 family support it for more than one motor as well. Maybe this tool could actually be useful to write better docs 😆</p>
+<p>👉 For the same question about stm32 h7 family, there are 2 out of 3 answers that are correct with the last one being the incorrect one. But its not so bad as once again the information is not clearly stated in the docs, for instance the h7 family is not included in <a href="https://docs.simplefoc.com/stm32_mcu#stm32-boards-support">this table</a> which summarizes stm32 support. There is also a problem in the second answer, which wrongly suggests that B-G431B-ESC1 board which however is listed in the table, is from the h7 family, but this is wrong.</p>
+<p>👉 Finally for the same question about teensy microcontrollers, all 3 answers are correct and concise, referring to the SimpleFOC docs which is nice! However they often refer to the "provided context" or even "context items" despite me asking explicitely referring in the base prompt to not refer to those (as these would be hidden to the user), so there is probably some further improvements to make to the base prompt!</p>
+<h3 id="test-3">Test 3</h3>
+<p>We are again testing information contained within the same page in the docs, but answering it requires a bit more of context as the user is asking for advice between several configurations, and the LLM should reason and compare the different options based on the info provided in the docs. Moreover there is various terms that the LLM should know about e.g. "nucleo f411re" is a specific nucleo board from the stm32 microcontroller f4 family.</p>
+<p>The answers should be the following:</p>
+<ul>
+<li>"If I have a choice between Arduino UNO, esp32 and stm32f1 chip, which one should I use if I wanna run 2 bldc motors with simplefoc with encoders and low-side current sensing?" --&gt; should say esp32</li>
+<li>"If I have a choice between Arduino UNO and nucleo f411re, which one is a better choice for smooth motor control with simplefoc? " --&gt; should say nucleo f411re (equivalent to stm32 f4 family)</li>
+<li>"If I have a choice between teensy 4.0 and stm32f1 and a 6pwm driver, which one should I use with simplefoc?" --&gt; should say teensy 4.0</li>
+</ul>
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="n">questions</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;If I have a choice between Arduino UNO, esp32 and stm32f1 chip, which one should I use if I wanna run 2 bldc motors with simplefoc with encoders and low-side current sensing?&quot;</span><span class="p">,</span>
+             <span class="s2">&quot;If I have a choice between Arduino UNO and nucleo f411re, which one is a better choice for smooth motor control with simplefoc?&quot;</span><span class="p">,</span>
+             <span class="s2">&quot;If I have a choice between teensy 4.0 and stm32f1 and a 6pwm driver, which one should I use with simplefoc?&quot;</span><span class="p">]</span>
+</pre></div>
+
+</div>
+
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="k">for</span> <span class="n">question</span> <span class="ow">in</span> <span class="n">questions</span><span class="p">:</span>
+
+    <span class="n">response</span> <span class="o">=</span> <span class="n">query_engine</span><span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="n">question</span><span class="p">)</span>
+
+    <span class="n">prompt</span> <span class="o">=</span> <span class="n">create_prompt</span><span class="p">(</span><span class="n">query</span><span class="o">=</span><span class="n">question</span><span class="p">,</span>
+                            <span class="n">context_items</span><span class="o">=</span><span class="p">[</span><span class="n">response</span><span class="o">.</span><span class="n">source_nodes</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">text</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">3</span><span class="p">)])</span>
+
+    <span class="n">inputs</span> <span class="o">=</span> <span class="n">tokenizer</span><span class="p">(</span><span class="n">prompt</span><span class="p">,</span> <span class="n">return_tensors</span><span class="o">=</span><span class="s2">&quot;pt&quot;</span><span class="p">)</span>
+
+    <span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;## User Question: </span><span class="si">{</span><span class="n">question</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">))</span>
+    <span class="k">for</span> <span class="n">sample_idx</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_samples</span><span class="p">):</span>
+        <span class="n">outputs</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">generate</span><span class="p">(</span><span class="n">input_ids</span><span class="o">=</span><span class="n">inputs</span><span class="p">[</span><span class="s2">&quot;input_ids&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">),</span>
+                                <span class="n">temperature</span><span class="o">=</span><span class="mf">0.7</span><span class="p">,</span>
+                                <span class="n">do_sample</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                <span class="n">max_new_tokens</span><span class="o">=</span><span class="mi">1024</span><span class="p">)</span>
+        <span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;### Output </span><span class="si">{</span><span class="n">sample_idx</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">))</span>
+        <span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="n">tokenizer</span><span class="o">.</span><span class="n">batch_decode</span><span class="p">(</span><span class="n">outputs</span><span class="p">)[</span><span class="mi">0</span><span class="p">][</span><span class="nb">len</span><span class="p">(</span><span class="s2">&quot;&lt;s&gt; &quot;</span><span class="o">+</span><span class="n">prompt</span><span class="p">):</span><span class="o">-</span><span class="nb">len</span><span class="p">(</span><span class="s2">&quot;&lt;/s&gt;&quot;</span><span class="p">)]))</span>
+</pre></div>
+
+
+<div class="markdown-output">
+<h2>User Question: If I have a choice between Arduino UNO, esp32 and stm32f1 chip, which one should I use if I wanna run 2 bldc motors with simplefoc with encoders and low-side current sensing?</h2>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 0</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: Based on your requirements of running two BLDC motors with encoders and low-side current sensing using the SimpleFOC library, I would recommend considering an STM32F1 family chip. The STM32F1 series provides initial support for low-side current sensing for one motor, and they offer a good balance of power and flexibility for your project.</p>
+<p>Here's a brief summary of the options you have:</p>
+<ol>
+<li>Arduino UNO: This microcontroller does not support low-side current sensing, so it's not recommended for your specific use case.</li>
+<li>ESP32: ESP32 devices are capable of running 4 BLDC motors with FOC algorithm. However, due to their communication capabilities, they might have some issues with precise real-time control. Low-side current sensing is supported, but it's limited to one motor.</li>
+<li>STM32F1: The initial support for low-side current sensing for one motor makes STM32F1 a good choice. It offers a balance between power and flexibility, and it's widely used in the community for FOC projects.</li>
+</ol>
+<p>For more detailed information, please refer to the SimpleFOC library documentation at <a href="https://docs.simplefoc.com/">https://docs.simplefoc.com/</a>.</p>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 1</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: Based on your requirements of running two BLDC motors with encoders and low-side current sensing using the SimpleFOC library, the STM32F1 family would be a suitable choice. The STM32F1 series supports low-side current sensing for one motor, and it has a good number of external interrupt pins, which can be used for encoder signals and PWM outputs. Additionally, the STM32F1 series has low loop times, making the FOC algorithm smoother. However, please note that programming the STM32F1 series might be more complex compared to Arduino UNO or ESP32, but with the SimpleFOC library integrated into the Arduino IDE, this is not a significant issue. Regards, SimpleFOC_AI. (SimpleFOC documentation: <a href="https://docs.simplefoc.com/">https://docs.simplefoc.com/</a>)</p>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 2</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: Based on your requirements of running two BLDC motors with encoders and low-side current sensing using the SimpleFOC library, the best option among Arduino UNO, esp32, and stm32f1 would be the stm32f1 chip. This is because, as stated in the SimpleFOC documentation, stm32f1 devices support low-side current sensing for one motor. Additionally, they have a sufficient number of external interrupt pins to accommodate the encoder signals and motor control PWM signals for both motors.</p>
+<p>However, keep in mind that the Arduino SimpleFOC library code for stm32 devices is the same as for Arduino UNO, except for the pin numbers. Furthermore, stm33 devices provide much better performance and smoother FOC algorithm execution due to their higher processing power, lower loop times, and larger number of external interrupts.</p>
+<p>For more information on current sensing support and hardware considerations, please refer to the SimpleFOC documentation at https://docs.simplefoc.com/.</p>
+</div>
+<div class="markdown-output">
+<h2>User Question: If I have a choice between Arduino UNO and nucleo f411re, which one is a better choice for smooth motor control with simplefoc?</h2>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 0</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: Based on the provided context, the STM32 Nucleo F411RE is a better choice for smooth motor control using the SimpleFOC library. This is because Nucleo boards have more external interrupt pins, which is essential for handling encoder signals in the FOC algorithm. Additionally, STM32 devices are more powerful and have lower loop times, leading to smoother motor control. However, programming these devices might be more complex compared to Arduino UNO. For more details, check the SimpleFOC documentation on the official website (<a href="https://docs.simplefoc.com/">https://docs.simplefoc.com/</a>).</p>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 1</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: Based on the information available in the SimpleFOC documentation, both Arduino UNO and Nucleo F411RE boards can be used with the SimpleFOC library for smooth motor control. However, there are some differences between the two:</p>
+<ol>
+<li>Arduino UNO has a limited number of interrupts and might not be the best choice if you plan to use multiple motors or encoders. The Arduino Mega, which also uses the AVR architecture, has more interrupts and might be a better choice in this case.</li>
+<li>Nucleo F411RE, which is based on STM32 microcontrollers, is more powerful and has more external interrupt pins. This makes it a better choice for implementing the FOC algorithm, as it results in smoother motor control with lower loop times. It can run up to 4 BLDC motors without a problem and supports various types of position sensors and motor drivers.</li>
+</ol>
+<p>Therefore, if you are looking for the smoothest motor control with SimpleFOC, the Nucleo F411RE is the better choice. However, keep in mind that the Arduino IDE now supports programming STM32 devices, making the complexity of programming these devices less of an issue.</p>
+<p>For more information, you can refer to the SimpleFOC documentation at <a href="https://docs.simplefoc.com/">https://docs.simplefoc.com/</a>.</p>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 2</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: Based on the documentation, both Arduino UNO and Nucleo F411RE can be used with the SimpleFOC library for motor control. However, there are some differences to consider:</p>
+<ol>
+<li>
+<p>Arduino UNO has fewer interrupts, which might limit the number of motors you can control simultaneously. But with two motors, you should be able to achieve good results.</p>
+</li>
+<li>
+<p>Nucleo F411RE, being an STM32 device, offers more processing power, faster loop times, and a larger number of external interrupts. This makes it a better choice for smoother motor control and handling more motors. The library code for STM32 devices is the same as for Arduino UNO, but with different pin numbers.</p>
+</li>
+</ol>
+<p>In summary, given your choice between Arduino UNO and Nucleo F411RE, the Nucleo F411RE is the better choice for smoother motor control with SimpleFOC due to its faster processing and larger number of external interrupts.</p>
+</div>
+<div class="markdown-output">
+<h2>User Question: If I have a choice between teensy 4.0 and stm32f1 and a 6pwm driver, which one should I use with simplefoc?</h2>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 0</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: Based on the provided context, both Teensy 4.0 and STM32F1 boards are compatible with SimpleFOC library for 6PWM driver. However, the Teensy 4.0 has more PWM channels (35) compared to STM32F1 (12), which could be a deciding factor depending on your specific use case.</p>
+<p>Regarding the Teensy 4.0, it uses an ARM Cortex-M7 processor, which is more powerful than the Cortex-M3 or M4 processors used in most STM32F1 boards. This could potentially result in better performance and capabilities.</p>
+<p>As for STM32F1, it offers current sensing support for in-line and low-side configurations for one motor. If your application requires current sensing, STM32F1 could be a better choice.</p>
+<p>In summary, if you don't require current sensing and prefer more PWM channels and better processing power, Teensy 4.0 could be the better choice. If you need current sensing or prefer a lower-cost, more widely available option, STM32F1 could be more suitable for you.</p>
+<p>For further information, please refer to the SimpleFOC documentation at <a href="https://docs.simplefoc.com">https://docs.simplefoc.com</a>.</p>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 1</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: Based on the information available in the SimpleFOC documentation, both Teensy 4.0 and STM32F1 support 6 PWM modes. However, there are some differences between these microcontrollers.</p>
+<p>Teensy 4.0 uses an ARM Cortex-M7 processor, which provides 35 PWMs and runs at 600 MHz. On the other hand, STM32F1, such as the one mentioned in the context item 2, uses an ARM Cortex-M3 or Cortex-M4 processor with 12 PWMs and runs at 72 MHz.</p>
+<p>When it comes to current sensing, the STM32F1 family supports low-side current sensing for one motor. This might be an important factor depending on your specific application requirements.</p>
+<p>In general, both teensy 4.0 and STM32F1 can run SimpleFOC library. I recommend considering the number of PWMs you need, the available current sensing options, and the processing power required for your application when choosing between Teensy 4.0 and STM32F1.</p>
+<p>For more information, you can refer to the SimpleFOC documentation on teensy (<a href="https://docs.simplefoc.com/en/latest/hardware_compatibility.html#teensy">https://docs.simplefoc.com/en/latest/hardware_compatibility.html#teensy</a>) and STM32 (<a href="https://docs.simplefoc.com/en/latest/hardware_compatibility.html#stm32">https://docs.simplefoc.com/en/latest/hardware_compatibility.html#stm32</a>) support.</p>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 2</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: Based on the information available in the SimpleFOC documentation, both Teensy 4.0 and STM32F1 are compatible with the SimpleFOC library in 6PWM mode. However, the Teensy 4.0 supports more PWMs (35 PWMs) compared to STM32F1 (12 PWMs in total). This could be a deciding factor if you plan to control more motors or other components that require PWM control.</p>
+<p>Additionally, the Teensy 4.0 supports both low-side and high-side current sensing out of the box, while STM32F1 supports only in-line current sensing. If you're planning to use current sensing, make sure to check which type suits your application best.</p>
+<p>For further details, I recommend checking the SimpleFOC documentation on the official website (<a href="https://docs.simplefoc.com/">https://docs.simplefoc.com/</a>) or posting your question on the SimpleFOC community forum (<a href="https://community.simplefoc.com/">https://community.simplefoc.com/</a>) for more specific advice.</p>
+</div></div>
+<p>👉 UNO vs esp32 vs stm32f1: unfortunately all the answers suggest to use stm32f1 rather than esp32, and it does not understand than esp32 is the only one which can support 2 motors. But again it is not so bad as the information is still correct and it is true that it is not so clear in the docs to understand that esp32 is supporting two motors e.g. in <a href="https://docs.simplefoc.com/microcontrollers#choosing-the-microcontroller">the 3rd table from this section</a> it is the only line which has a ✅ and that does not say "one-motor" but for the LLM to accurately find and interpret this information is very hard.</p>
+<p>👉 UNO vs nucleo f411re: perfect 3/3 here!</p>
+<p>👉 teensy vs stm32f1:  2/3 here as the last answer is wrong and even suggests confidently that "Teensy 4.0 supports both low-side and high-side current sensing out of the box" which is completely false! Moreover in the second answer there is also a suggestion that "Teensy 4.0 uses an ARM Cortex-M7 processor, which provides 35 PWMs" which might be an hallucination (to check) and is anyway irrelevant here as the question asks for 6PWM. It also provides a link to the simplefoc documentation which does not exists. Could be better!</p>
+<h3 id="test-4">Test 4</h3>
+<p>This question is the example we chose at the beginning, which is a commonly raised question by the community when using SimpleFOC library with PlatformIO and for which the relevant docs is accessible here: <a href="https://docs.simplefoc.com/library_platformio">https://docs.simplefoc.com/library_platformio</a>.</p>
+<p>The answer should be the following:</p>
+<ul>
+<li>"Simplefoc compiles and I flush it to my board, but nothing moves. I use platformio, what could be the problem?" --&gt; It should suggest to add <code>lib_archive = false</code> to the platrofrmio.ini file</li>
+</ul>
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="n">questions</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;Simplefoc compiles and I flush it to my board, but nothing moves. I use platformio, what could be the problem?&quot;</span><span class="p">]</span>
+</pre></div>
+
+</div>
+
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="k">for</span> <span class="n">question</span> <span class="ow">in</span> <span class="n">questions</span><span class="p">:</span>
+
+    <span class="n">response</span> <span class="o">=</span> <span class="n">query_engine</span><span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="n">question</span><span class="p">)</span>
+
+    <span class="n">prompt</span> <span class="o">=</span> <span class="n">create_prompt</span><span class="p">(</span><span class="n">query</span><span class="o">=</span><span class="n">question</span><span class="p">,</span>
+                            <span class="n">context_items</span><span class="o">=</span><span class="p">[</span><span class="n">response</span><span class="o">.</span><span class="n">source_nodes</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">text</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">3</span><span class="p">)])</span>
+
+    <span class="n">inputs</span> <span class="o">=</span> <span class="n">tokenizer</span><span class="p">(</span><span class="n">prompt</span><span class="p">,</span> <span class="n">return_tensors</span><span class="o">=</span><span class="s2">&quot;pt&quot;</span><span class="p">)</span>
+
+    <span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;## User Question: </span><span class="si">{</span><span class="n">question</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">))</span>
+    <span class="k">for</span> <span class="n">sample_idx</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_samples</span><span class="p">):</span>
+        <span class="n">outputs</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">generate</span><span class="p">(</span><span class="n">input_ids</span><span class="o">=</span><span class="n">inputs</span><span class="p">[</span><span class="s2">&quot;input_ids&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">),</span>
+                                <span class="n">temperature</span><span class="o">=</span><span class="mf">0.7</span><span class="p">,</span>
+                                <span class="n">do_sample</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                <span class="n">max_new_tokens</span><span class="o">=</span><span class="mi">1024</span><span class="p">)</span>
+        <span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;### Output </span><span class="si">{</span><span class="n">sample_idx</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">))</span>
+        <span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="n">tokenizer</span><span class="o">.</span><span class="n">batch_decode</span><span class="p">(</span><span class="n">outputs</span><span class="p">)[</span><span class="mi">0</span><span class="p">][</span><span class="nb">len</span><span class="p">(</span><span class="s2">&quot;&lt;s&gt; &quot;</span><span class="o">+</span><span class="n">prompt</span><span class="p">):</span><span class="o">-</span><span class="nb">len</span><span class="p">(</span><span class="s2">&quot;&lt;/s&gt;&quot;</span><span class="p">)]))</span>
+</pre></div>
+
+
+<div class="markdown-output">
+<h2>User Question: Simplefoc compiles and I flush it to my board, but nothing moves. I use platformio, what could be the problem?</h2>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 0</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: I'm here to help you troubleshoot issues you might have with using SimpleFOC library in PlatformIO. Based on the information you've provided, it seems that your SimpleFOC code is compiling and being uploaded to your board, but the motors are not moving. Here are some possible causes and solutions for this issue:</p>
+<ol>
+<li>
+<p><strong>Check the wiring</strong>: Make sure that the motors are properly connected to the board, and that the motor phases, grounds, and power sources are all wired correctly. You can consult the SimpleFOC documentation to verify the wiring scheme for your motor type.</p>
+</li>
+<li>
+<p><strong>Check the code</strong>: Ensure that your code is written correctly and that the motor configuration parameters, such as the motor type, direction, and PID gains, are set correctly. You can refer to the SimpleFOC documentation for examples on how to configure and use the library in Arduino projects.</p>
+</li>
+<li>
+<p><strong>Check the PID gains</strong>: The PID gains control the behavior of the motor control algorithm. If the gains are not set correctly, the motor might not respond as expected. You can consult the SimpleFOC documentation for guidelines on how to tune the PID gains for your specific application.</p>
+</li>
+<li>
+<p><strong>Check the sensor connection</strong>: Make sure that the sensors (encoder or speed sensor) are connected to the board and to the correct pins. You can refer to the SimpleFOC documentation for the recommended wiring scheme for your sensor type.</p>
+</li>
+<li>
+<p><strong>Check the PlatformIO configuration</strong>: Ensure that the SimpleFOC library is being included in your project correctly and that the <code>lib_archive</code> option is set to <code>false</code>. If you are using the source version of the library, you will also need to create a symlink as described in the PlatformIO documentation.</p>
+</li>
+<li>
+<p><strong>Check the power supply</strong>: Make sure that the power supply to the motors and the board is stable and within the recommended voltage range. Low voltage or voltage spikes can cause the motor to not move or behave erratically.</p>
+</li>
+</ol>
+<p>If none of the above steps solve the issue, consider providing more details about the project setup, board, and motor configurations, as well as any error messages or debug output, to help narrow down the cause of the problem. Additionally, you may want to consult the SimpleFOC and PlatformIO documentation for more information and troubleshooting tips.</p>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 1</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: I'm here to help you troubleshoot your issue with SimpleFOC not moving your motor using PlatformIO. Based on the context provided, here are some steps you can take to identify and resolve the problem:</p>
+<ol>
+<li>
+<p>Check your wiring: Ensure that the motor wiring is correctly connected to the appropriate pins on your board and that you have a proper connection between the motor controller and the MCU.</p>
+</li>
+<li>
+<p>Verify motor direction: Review the configuration of your motor direction in the SimpleFOC library. Make sure that it matches the physical direction of your motor.</p>
+</li>
+<li>
+<p>Review your code: Check that you correctly imported the SimpleFOC library into your project and that you're using the correct functions and parameters.</p>
+</li>
+<li>
+<p>Motor control example: Attempt to run the motor control example provided with SimpleFOC. If the example works correctly, it is likely that there's an issue in your code. If not, it could be an issue with the library, your board, or your setup.</p>
+</li>
+<li>
+<p>Communication between the MCU and motor controller: Make sure that the communication between the MCU and the motor controller is working properly. You can check the serial monitor in PlatformIO to verify if any error messages are being displayed.</p>
+</li>
+<li>
+<p>PlatformIO configuration: Ensure that you've correctly configured your project in the platformio.ini file. Double-check that the board, framework, and library settings are correct.</p>
+</li>
+<li>
+<p>Firmware version: Check that you're using the latest version of both SimpleFOC and PlatformIO. If not, try updating them to their latest releases to see if that resolves the issue.</p>
+</li>
+<li>
+<p>Debugging: Use PlatformIO's debugging capabilities, such as the Serial Monitor, to help you narrow down the problem.</p>
+</li>
+</ol>
+<p>If none of these steps help, please provide more details about your setup, including the board you're using, the motor controller, and the specific error messages you're encountering. This will help us better understand and assist you with your issue.</p>
+<p>Additionally, you can refer to SimpleFOC's documentation and community resources, including the <a href="https://github.com/simplefoc/Arduino-FOC">SimpleFOC GitHub repository</a>, the <a href="https://discord.gg/v2nX4Yv">SimpleFOC Discord server</a>, and the <a href="https://discourse.simplefoc.com/">SimpleFOC community forum</a>.</p>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 2</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: I'm sorry to hear that you're having trouble getting your SimpleFOC project to move using PlatformIO. There are a few potential causes for this issue.</p>
+<p>First, make sure you have correctly configured your project by adding the SimpleFOC library to it and setting the <code>lib_archive</code> option to <code>false</code> in your <code>platformio.ini</code> file. This is necessary for SimpleFOC to compile correctly with PlatformIO.</p>
+<p>Next, check your wiring and motor connections. Make sure that the motors are connected to the correct pins and that they have the correct polarity. You can refer to the documentation on the SimpleFOC GitHub page (<a href="https://github.com/simplefoc/Arduino-FOC">https://github.com/simplefoc/Arduino-FOC</a>) for information on how to connect the motors and sensors.</p>
+<p>Another possibility is that your motor parameters may not be set correctly. You can find the motor configuration examples in the SimpleFOC library under the <code>examples/MotorConfig</code> folder. Adjust the motor parameters to match your specific setup.</p>
+<p>Lastly, ensure that your code is correctly initializing and controlling the motors. Review your code and make sure that you are calling the necessary functions to initialize and control the motors.</p>
+<p>If you are still having trouble, consider reaching out to the SimpleFOC community on the SimpleFOC GitHub page or the PlatformIO forum for further assistance.</p>
+</div></div>
+<p>👉 The answers are very good here, only the second answer remains a bit too long/generic and doest not explicitly mention the <code>lib_archive=false</code> option even though it mentions checking the configuration of the platformio.ini file. But in general the answers are very useful!</p>
+<h3 id="test-5">Test 5</h3>
+<p>Finally we test whether RAG pipeline is able to retrieve info correctly from <a href="https://docs.simplefoc.com/position_sensors">this section</a> of the docs.</p>
+<p>The answers should be the following:</p>
+<ul>
+<li>"What are the supported position sensors with simplefoc?" --&gt; should say Encoder, Magnetic sensor and Hall sensors</li>
+</ul>
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="n">questions</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;What are the supported position sensors with simplefoc?&quot;</span><span class="p">]</span>
+</pre></div>
+
+</div>
+
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="k">for</span> <span class="n">question</span> <span class="ow">in</span> <span class="n">questions</span><span class="p">:</span>
+
+    <span class="n">response</span> <span class="o">=</span> <span class="n">query_engine</span><span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="n">question</span><span class="p">)</span>
+
+    <span class="n">prompt</span> <span class="o">=</span> <span class="n">create_prompt</span><span class="p">(</span><span class="n">query</span><span class="o">=</span><span class="n">question</span><span class="p">,</span>
+                            <span class="n">context_items</span><span class="o">=</span><span class="p">[</span><span class="n">response</span><span class="o">.</span><span class="n">source_nodes</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">text</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">3</span><span class="p">)])</span>
+
+    <span class="n">inputs</span> <span class="o">=</span> <span class="n">tokenizer</span><span class="p">(</span><span class="n">prompt</span><span class="p">,</span> <span class="n">return_tensors</span><span class="o">=</span><span class="s2">&quot;pt&quot;</span><span class="p">)</span>
+
+    <span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;## User Question: </span><span class="si">{</span><span class="n">question</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">))</span>
+    <span class="k">for</span> <span class="n">sample_idx</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_samples</span><span class="p">):</span>
+        <span class="n">outputs</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">generate</span><span class="p">(</span><span class="n">input_ids</span><span class="o">=</span><span class="n">inputs</span><span class="p">[</span><span class="s2">&quot;input_ids&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">),</span>
+                                <span class="n">temperature</span><span class="o">=</span><span class="mf">0.7</span><span class="p">,</span>
+                                <span class="n">do_sample</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                <span class="n">max_new_tokens</span><span class="o">=</span><span class="mi">1024</span><span class="p">)</span>
+        <span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;### Output </span><span class="si">{</span><span class="n">sample_idx</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">))</span>
+        <span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="n">tokenizer</span><span class="o">.</span><span class="n">batch_decode</span><span class="p">(</span><span class="n">outputs</span><span class="p">)[</span><span class="mi">0</span><span class="p">][</span><span class="nb">len</span><span class="p">(</span><span class="s2">&quot;&lt;s&gt; &quot;</span><span class="o">+</span><span class="n">prompt</span><span class="p">):</span><span class="o">-</span><span class="nb">len</span><span class="p">(</span><span class="s2">&quot;&lt;/s&gt;&quot;</span><span class="p">)]))</span>
+</pre></div>
+
+
+<div class="markdown-output">
+<h2>User Question: What are the supported position sensors with simplefoc?</h2>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 0</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: The SimpleFOC library supports various types of position sensors, including encoders and magnetic sensors. Encoders are the most commonly used position sensors due to their precision, standardization, and low noise level. Magnetic sensors, on the other hand, use precise magnetic field measurement to estimate position. The library also plans to support IMU sensors in the future. (Refer to the SimpleFOC documentation for more details.)</p>
+<p>For encoders, the library supports optical, capacitive, and magnetic types. You can find examples and prices of these encoders on various e-commerce platforms such as eBay or Mouser. Encoder precision and execution efficiency are important factors to consider when selecting an encoder for your application.</p>
+<p>Encountering issues during motor initialization can be due to problems with the position sensor or the current sense. Debugging such issues can be facilitated using the SimpleFOCDebug class. This class provides methods like SIMPLEFOC_DEBUG() for logging messages to the console. You can also use FlashStringHelper, disable debug output globally using the build flag SIMPLEFOC_DISABLE_DEBUG, and understand the rationale behind using SimpleFOCDebug instead of Serial.println in the library. (Refer to the SimpleFOC documentation for more information.)</p>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 1</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: The SimpleFOC library supports encoders and magnetic sensors as position sensors. Encoders estimate position by counting impulses on their <code>A</code>, <code>B</code>, and <code>index</code> channels. Magnetic sensors use precise magnetic field measurement to estimate position. For more information, please refer to the SimpleFOC documentation on position sensors at <a href="https://docs.simplefoc.com/">https://docs.simplefoc.com/</a>.</p>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 2</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: The SimpleFOC library supports encoders and magnetic sensors as position sensors. Encoders are the most commonly used position sensors due to their precision, standardization, and low noise level. Magnetic sensors, on the other hand, use precise magnetic field measurement to estimate position. For more information, please refer to the SimpleFOC documentation on position sensors at <a href="https://docs.simplefoc.com/position-sensors/">https://docs.simplefoc.com/position-sensors/</a>.</p>
+</div></div>
+<p>👉 The answers are generally correct but they only mention encoders and magnetic sensors, and forget bout Hall sensors which is weird because it is retrieved in one of the context items (but it is also absent from other chunks which might explain why the LLM does not mention it). However the first answer (output 0) is too long and everything after the first paragraph is too far away from the user query, outputs 1 and 2 are better.</p>
+<h3 id="test-6">Test 6</h3>
+<p>Finally we test if the RAG pipeline is able to help users debug their SimpleFOC code.</p>
+<p>Here is the question:
+"My code does not work, what could be the problem?</p>
+<pre><code class="language-cpp">#include &lt;SimpleFOC.h&gt;
+
+Encoder encoder = Encoder(2, 3, 500);
+// interrupt routine initialisation
+void doA(){encoder.handleA();}
+void doB(){encoder.handleB();}
+
+void setup() {
+  // monitoring port
+  Serial.begin(115200);
+
+  // initialise encoder hardware
+  sensor.init();
+  // hardware interrupt enable
+  encoder.enableInterrupts(doA, doB);
+
+  Serial.println(&quot;Encoder ready&quot;);
+  _delay(1000);
+}
+
+void loop() {
+  // display the angle and the angular velocity to the terminal
+  Serial.print(sensor.getAngle());
+  Serial.print(&quot;\t&quot;);
+  Serial.println(sensor.getVelocity());
+}
+</code></pre>
+<p>The answers should be to include the following in the loop</p>
+<pre><code class="language-cpp"> // IMPORTANT
+  // read sensor and update the internal variables
+  sensor.update();
+</code></pre>
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="n">questions</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;&quot;&quot;my code does not work, what could be the problem?</span>
+<span class="s2">```cpp</span>
+<span class="s2">#include &lt;SimpleFOC.h&gt;</span>
+
+<span class="s2">Encoder encoder = Encoder(2, 3, 500);</span>
+<span class="s2">// interrupt routine initialisation</span>
+<span class="s2">void doA(){encoder.handleA();}</span>
+<span class="s2">void doB(){encoder.handleB();}</span>
+
+<span class="s2">void setup() {</span>
+<span class="s2">  // monitoring port</span>
+<span class="s2">  Serial.begin(115200);</span>
+
+<span class="s2">  // initialise encoder hardware</span>
+<span class="s2">  sensor.init();</span>
+<span class="s2">  // hardware interrupt enable</span>
+<span class="s2">  encoder.enableInterrupts(doA, doB);</span>
+
+<span class="s2">  Serial.println(&quot;Encoder ready&quot;);</span>
+<span class="s2">  _delay(1000);</span>
+<span class="s2">}</span>
+
+<span class="s2">void loop() {</span>
+<span class="s2">  // display the angle and the angular velocity to the terminal</span>
+<span class="s2">  Serial.print(sensor.getAngle());</span>
+<span class="s2">  Serial.print(&quot;</span><span class="se">\t</span><span class="s2">&quot;);</span>
+<span class="s2">  Serial.println(sensor.getVelocity());</span>
+<span class="s2">}</span>
+<span class="s2">```</span>
+<span class="s2">&quot;&quot;&quot;</span><span class="p">]</span>
+</pre></div>
+
+</div>
+
+<div class="code-cell">
+<div class="highlight"><pre><span></span><span class="k">for</span> <span class="n">question</span> <span class="ow">in</span> <span class="n">questions</span><span class="p">:</span>
+
+    <span class="n">response</span> <span class="o">=</span> <span class="n">query_engine</span><span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="n">question</span><span class="p">)</span>
+
+    <span class="n">prompt</span> <span class="o">=</span> <span class="n">create_prompt</span><span class="p">(</span><span class="n">query</span><span class="o">=</span><span class="n">question</span><span class="p">,</span>
+                            <span class="n">context_items</span><span class="o">=</span><span class="p">[</span><span class="n">response</span><span class="o">.</span><span class="n">source_nodes</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">text</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">3</span><span class="p">)])</span>
+
+    <span class="n">inputs</span> <span class="o">=</span> <span class="n">tokenizer</span><span class="p">(</span><span class="n">prompt</span><span class="p">,</span> <span class="n">return_tensors</span><span class="o">=</span><span class="s2">&quot;pt&quot;</span><span class="p">)</span>
+
+    <span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;## User Question: </span><span class="si">{</span><span class="n">question</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">))</span>
+    <span class="k">for</span> <span class="n">sample_idx</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_samples</span><span class="p">):</span>
+        <span class="n">outputs</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">generate</span><span class="p">(</span><span class="n">input_ids</span><span class="o">=</span><span class="n">inputs</span><span class="p">[</span><span class="s2">&quot;input_ids&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">),</span>
+                                <span class="n">temperature</span><span class="o">=</span><span class="mf">0.7</span><span class="p">,</span>
+                                <span class="n">do_sample</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                <span class="n">max_new_tokens</span><span class="o">=</span><span class="mi">1024</span><span class="p">)</span>
+        <span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;### Output </span><span class="si">{</span><span class="n">sample_idx</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">))</span>
+        <span class="n">display</span><span class="p">(</span><span class="n">Markdown</span><span class="p">(</span><span class="n">tokenizer</span><span class="o">.</span><span class="n">batch_decode</span><span class="p">(</span><span class="n">outputs</span><span class="p">)[</span><span class="mi">0</span><span class="p">][</span><span class="nb">len</span><span class="p">(</span><span class="s2">&quot;&lt;s&gt; &quot;</span><span class="o">+</span><span class="n">prompt</span><span class="p">):</span><span class="o">-</span><span class="nb">len</span><span class="p">(</span><span class="s2">&quot;&lt;/s&gt;&quot;</span><span class="p">)]))</span>
+</pre></div>
+
+
+<div class="markdown-output">
+<h2>User Question: my code does not work, what could be the problem?</h2>
+<p>```cpp</p>
+<h1>include <SimpleFOC.h></h1>
+<p>Encoder encoder = Encoder(2, 3, 500);
+// interrupt routine initialisation
+void doA(){encoder.handleA();}
+void doB(){encoder.handleB();}</p>
+<p>void setup() {
+  // monitoring port
+  Serial.begin(115200);</p>
+<p>// initialise encoder hardware
+  sensor.init();
+  // hardware interrupt enable
+  encoder.enableInterrupts(doA, doB);</p>
+<p>Serial.println("Encoder ready");
+  _delay(1000);
+}</p>
+<p>void loop() {
+  // display the angle and the angular velocity to the terminal
+  Serial.print(sensor.getAngle());
+  Serial.print("    ");
+  Serial.println(sensor.getVelocity());
+}
+```</p>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 0</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: Based on the code you've provided, it seems that there are a few issues. Firstly, you have a typo in your variable name for the encoder. It should be named <code>encoder</code> instead of <code>sensor</code>. Also, you need to initialize the software interrupt library and attach the listeners to the correct encoder pins. Here is the corrected code:</p>
+<p>```cpp</p>
+<h1>include <SimpleFOC.h></h1>
+<h1>include <PciManager.h></h1>
+<h1>include <PciListenerImp.h></h1>
+<p>// define Encoder
+Encoder encoder = Encoder(2, 3, 500);</p>
+<p>// channel A and B callbacks
+void doA(){encoder.handleA();}
+void doB(){encoder.handleB();}</p>
+<p>// pin change listeners
+PciListenerImp listenerA(encoder.pinA, doA);
+PciListenerImp listenerB(encoder.pinB, doB);</p>
+<p>void setup() {
+  // monitoring port
+  Serial.begin(115200);</p>
+<p>// initialize encoder hardware
+  encoder.init();</p>
+<p>// interrupt initialization
+  PciManager.registerListener(&amp;listenerA);
+  PciManager.registerListener(&amp;listenerB);</p>
+<p>Serial.println("Encoder ready");
+  _delay(1000);
+}</p>
+<p>void loop() {
+  // IMPORTANT - call as frequently as possible
+  // update the sensor values 
+  encoder.update();</p>
+<p>// display the angle and the angular velocity to the terminal
+  Serial.print(encoder.getAngle());
+  Serial.print("\t");
+  Serial.println(encoder.getVelocity());
+}
+```</p>
+<p>Also, don't forget to test the sensor and make sure it's working properly before testing the driver. You can refer to the SimpleFOC documentation for more information on testing sensors and encoders: <a href="https://docs.simplefoc.com/en/latest/getting_started/index.html#testing-the-sensor">https://docs.simplefoc.com/en/latest/getting_started/index.html#testing-the-sensor</a>.</p>
+<p>If the problem persists, please provide more details about the hardware setup, error messages, or unexpected behavior you're experiencing.</p>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 1</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: I see you're having trouble getting your code to work with the SimpleFOC library. Based on the provided code snippet, it seems you're trying to use an Encoder object without properly initializing it.</p>
+<p>First, let's make sure you have the library installed and the necessary hardware connected as mentioned on the SimpleFOC documentation (https://docs.simplefoc.com/).</p>
+<p>Now, in your code, replace "sensor" with "encoder". Also, make sure to change the impulses per revolution parameter accordingly:</p>
+<p>```cpp
+Encoder encoder = Encoder(2, 3, 500);
+// interrupt routine initialisation
+void doA(){encoder.handleA();}
+void doB(){encoder.handleB();}</p>
+<p>void setup() {
+  // monitoring port
+  Serial.begin(115200);</p>
+<p>// initialize encoder hardware
+  encoder.init();
+  // hardware interrupt enable
+  encoder.enableInterrupts(doA, doB);</p>
+<p>Serial.println("Encoder ready");
+  _delay(1000);
+}</p>
+<p>void loop() {
+  // IMPORTANT
+  // read sensor and update the internal variables
+  encoder.update();
+  // display the angle and the angular velocity to the terminal
+  Serial.print(encoder.getAngle());
+  Serial.print("\t");
+  Serial.println(encoder.getVelocity());
+}
+```</p>
+<p>If the issue still persists, make sure to verify the sensor pins' connections and check for any conflicts with other libraries or hardware. You might also want to go through the SimpleFOC documentation for sensors (https://docs.simplefoc.com/sensors/) to ensure you're using the correct parameters.</p>
+</div><div class="output"><pre>The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+</pre></div>
+
+<div class="markdown-output">
+<h3>Output 2</h3>
+</div>
+<div class="markdown-output">
+<p>SimpleFOC_AI: I see you're having trouble with your code not working as expected. Based on the provided code snippet, there are a few potential issues:</p>
+<ol>
+<li>Incorrect library inclusion: Make sure you have included the SimpleFOC library correctly at the beginning of your code with <code>#include &lt;SimpleFOC.h&gt;</code>.</li>
+<li>Incorrect sensor initialization: Instead of <code>sensor.init()</code>, it should be <code>encoder.init()</code>. The <code>encoder</code> variable is defined as an Encoder object.</li>
+<li>Incorrect pin numbers: Check that pins 2 and 3 are correctly connected to your encoder's A and B signals, respectively.</li>
+<li>Interrupt initialization: Ensure that you have the <code>PciManager</code> library installed and included correctly (<code>#include &lt;PciManager.h&gt;</code> and <code>#include &lt;PciListenerImp.h&gt;</code>) for software interrupts.</li>
+<li>Encoder object definition: You have a typo in your encoder definition, it should be <code>Encoder encoder = Encoder(2, 3, 500);</code> instead of <code>sensor.init();</code>.</li>
+<li>Call to update function: In the loop function, you need to call the update function for the encoder to get the latest readings, <code>encoder.update();</code>.</li>
+</ol>
+<p>Make sure to go through the <a href="https://docs.simplefoc.com/docs/classes/Encoder.html">SimpleFOC Encoder documentation</a> for more information. If these suggestions don't help, you may need to provide more context, such as error messages or specific issues you are encountering.</p>
+</div></div>
+<p>👉 The final test is pretty good here and deals efficiently with code 😎 Interestingly it even cought up a typo in a variable name that was done unintentionally by copying wrong code so pretty impressive. The only thing that is not very good here is that output 0 and 2 both mention to include PCIListener whereas it is actually not needed here.</p>
+<h2 id="whats-next">What's Next?</h2>
+<p>Given the results on our little evaluation benchmark, there are several things that could be done to further improve the results:</p>
+<ul>
+<li>Improve the chunking: having fixed-size chunks is quite rigid and sometimes results in important information being cut out from the chunk. For instance in test 5 the most important chunk from <a href="https://docs.simplefoc.com/sensors">this part</a> of the docs is successfully retrieved, but it is cut before "Hall sensors" are mentionned, resulting in important loss of information in the generated output. We could have longer chunks but increasing length comes with additional cost and might not fit anymore in the context length. More advanced chunking methods might be useful here.</li>
+<li>Improve the style of the answers: While I generally like the answers, there are still some undesired behaviors such as mention of context items or lengthy/generic answers. One way to improve that would be to further emphasize the desired style of answer in the base prompt. Another possibility would be to finetune the model on a database of the human query/answers which could be easily retrieved from the SimpleFOC docs.</li>
+<li>Improve the docs: at the end this tool might be most useful for SimpleFOC maintainers to understand when the information is not so clearly explained in the docs in cases when the RAG pipeline fails to correctly answer a user query.</li>
+</ul>
+<p>Obviously all contributions and suggestions for improvements are very welcome! You can check the <span id="reprotext">Github </span><span class="github-span">Repository</span></a> and raise issues or suggest improvements if you have any 😀</p>
